@@ -40,7 +40,10 @@ async function handle(m: ToWorker) {
       break;
     }
     case "open":
-      await engine.open(m.file, m.resolution, m.autoExposure, m.autoDof, m.upscale, m.safeAnalysis, m.analysis);
+      await engine.open(m.file, m.resolution, m.autoExposure, m.autoDof, m.upscale, m.safeAnalysis, m.analysis, m.series);
+      break;
+    case "seriesView":
+      await engine.seriesView(m.single);
       break;
     case "upscale-now":
       engine.forceUpscale();

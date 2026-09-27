@@ -3,7 +3,8 @@
  * everything else to the engine worker. No pixel processing happens here.
  */
 import "./styles.css";
-import type { Capabilities, ExportFormat, FromWorker, StageProfile, Summary, ToWorker, UpscaleInfo, UpscaleMode } from "./engine/protocol.ts";
+import type { Capabilities, ExportFormat, FromWorker, SeriesInfo, StageProfile, Summary, ToWorker, UpscaleInfo, UpscaleMode } from "./engine/protocol.ts";
+import { openSeriesSheet } from "./ui/seriesSheet.ts";
 import { DEPTH_BANDS, type Decision, type DepthBand, type Params } from "./decision/params.ts";
 import { createLookPanel } from "./ui/lookPanel.ts";
 import { createRegionsPanel } from "./ui/regionsPanel.ts";
@@ -77,7 +78,7 @@ let canvas = el("canvas");
 const badge = el("div", { class: "badge" });
 const rings = el("div", { class: "rings" });
 const progress = el("div", { class: "progress" }, el("div", { class: "t" }), el("div", { class: "bar indet" }, el("i")));
-const fileInput = el("input", { type: "file", accept: ".dng,.DNG,.heic,.HEIC,.heif,.jpg,.jpeg,.png,image/*,image/x-adobe-dng", style: "display:none" });
+const fileInput = el("input", { type: "file", multiple: "", accept: ".dng,.DNG,.heic,.HEIC,.heif,.jpg,.jpeg,.png,image/*,image/x-adobe-dng", style: "display:none" });
 const empty = el("div", { class: "empty" },
   el("h2", { text: t("empty.title") }),
   el("p", { text: t("empty.body") }),
@@ -228,7 +229,7 @@ let pendingAuto: { x: number; y: number } | undefined;
 let busy = false;
 
 (document.getElementById("open-btn") as HTMLButtonElement).onclick = () => fileInput.click();
-fileInput.onchange = () => { const f = fileInput.files?.[0]; if (f) openFile(f); fileInput.value = ""; };
+fileInput.onchange = () => { openFiles([...(fileInput.files ?? [])]); fileInput.value = ""; };
 const openBtn = el("button", { class: "btn small ghost", text: t("app.open") });
 openBtn.onclick = () => fileInput.click();
 header.insertBefore(openBtn, capsEl);
@@ -272,6 +273,20 @@ checkBtn.append(checkBadge);
 checkBtn.onclick = () => (!moreEl.hidden && moreId === "check" ? (moreEl.hidden = true) : showPane("check"));
 header.insertBefore(undoBtn, exportTop);
 header.insertBefore(redoBtn, exportTop);
+// A/B for a merged series: the merge or its reference shot alone, under the same edits.
+const seriesBtn = el("button", { class: "btn small ghost series-btn", hidden: "" });
+let seriesInfo: SeriesInfo | undefined;
+function renderSeries() {
+  seriesBtn.hidden = !seriesInfo;
+  if (!seriesInfo) return;
+  const merged = seriesInfo.showing === "merged";
+  seriesBtn.textContent = merged ? t("series.merged", { n: String(seriesInfo.frames) }) : t("series.single");
+  seriesBtn.classList.toggle("on", merged);
+  const k = seriesInfo.noise.single / Math.max(1e-9, seriesInfo.noise.merged);
+  seriesBtn.title = t("series.abTip", { k: k.toFixed(1) });
+}
+seriesBtn.onclick = () => { if (seriesInfo) send({ type: "seriesView", single: seriesInfo.showing === "merged" }); };
+header.insertBefore(seriesBtn, undoBtn);
 header.append(checkBtn, moreBtn);
 undoBtn.disabled = redoBtn.disabled = true;
 stage.append(fsExit);
@@ -343,8 +358,9 @@ function baseView(): { type: "view"; view: 0 | 1 | 2 | 6; region?: number } {
 }
 /** A photo is being opened (its analysis has not arrived): late messages about the previous one are ignored. */
 let opening = false;
-function openFile(f: File, restore?: Params, upscaleOverride?: UpscaleMode) {
+function openFile(f: File, restore?: Params, upscaleOverride?: UpscaleMode, series?: { files: File[]; ref?: number }) {
   opening = true;
+  seriesInfo = undefined; renderSeries();
   layersPanel.reset(); // nothing of the previous photo's editing state (tab, picking, a flare waiting) survives
   forgetPendingParams();
   // A mask shown for the previous photo's layer must not colour the new one's first previews.
@@ -368,12 +384,19 @@ function openFile(f: File, restore?: Params, upscaleOverride?: UpscaleMode) {
   logLines.length = 0;
   setProgress(t("progress.opening", { file: f.name }));
   busy = true;
-  send({ type: "open", file: f, resolution, autoExposure, autoDof, upscale: upscaleOverride ?? upscaleMode, safeAnalysis: flag(() => localStorage, SAFE_ANALYSIS), analysis: analysisLevel() });
+  send({ type: "open", file: f, resolution, autoExposure, autoDof, upscale: upscaleOverride ?? upscaleMode, safeAnalysis: flag(() => localStorage, SAFE_ANALYSIS), analysis: analysisLevel(), series });
 }
 
 // Drag & drop on desktop.
 stage.addEventListener("dragover", (e) => e.preventDefault());
-stage.addEventListener("drop", (e) => { e.preventDefault(); const f = e.dataTransfer?.files?.[0]; if (f) openFile(f); });
+stage.addEventListener("drop", (e) => { e.preventDefault(); openFiles([...(e.dataTransfer?.files ?? [])]); });
+
+/** One photo opens; several are offered as a series to merge (src/burst). */
+function openFiles(files: File[]) {
+  const imgs = files.filter((f) => /^image\//.test(f.type) || /\.(dng|heic|heif|jpe?g|png|tiff?)$/i.test(f.name));
+  if (imgs.length === 1) openFile(imgs[0]);
+  else if (imgs.length > 1) openSeriesSheet(imgs, { merge: (fs, ref) => openFile(fs[0], undefined, undefined, { files: fs, ref }), single: (f) => openFile(f) });
+}
 
 function setProgress(text: string | undefined, frac?: number) {
   progress.classList.toggle("on", !!text);
@@ -1528,6 +1551,10 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
         openFile(r.file, r.params);
       });
       break;
+    case "series":
+      seriesInfo = m.info;
+      renderSeries();
+      break;
     case "upscale":
       upscale = m.info;
       // While the 2× stage runs the tab holds its largest buffers: keep the crash
@@ -1758,6 +1785,7 @@ if (autotestAllowed()) {
   void import("./autotest.ts").then(({ runAutotest }) => {
     const start = () => runAutotest({
       openFile: (f) => openFile(f), params: () => params, pushParams, send,
+      openSeries: (fs) => openFile(fs[0], undefined, undefined, { files: fs }),
       on: (fn) => { engineListeners.add(fn); return () => engineListeners.delete(fn); },
     });
     // After the engine is ready (the first "ready" message).

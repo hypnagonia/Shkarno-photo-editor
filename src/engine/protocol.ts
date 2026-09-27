@@ -58,7 +58,8 @@ export interface UpscaleInfo {
 
 export type ToWorker =
   | { type: "init"; base: string; forceCpu?: boolean; /** Behave as on a phone (local autotest only). */ phone?: boolean }
-  | { type: "open"; file: File; resolution: "auto" | "full" | "half"; autoExposure: boolean; autoDof: boolean; upscale: UpscaleMode; /** Scene analysis on the CPU (it crashed this device's GPU before). */ safeAnalysis?: boolean; /** Less scene analysis: the tab died during it on this device before. */ analysis?: AnalysisLevel }
+  | { type: "open"; file: File; resolution: "auto" | "full" | "half"; autoExposure: boolean; autoDof: boolean; upscale: UpscaleMode; /** Scene analysis on the CPU (it crashed this device's GPU before). */ safeAnalysis?: boolean; /** Less scene analysis: the tab died during it on this device before. */ analysis?: AnalysisLevel; /** Several shots of one scene, merged (src/burst); `file` is the first. */ series?: { files: File[]; ref?: number } }
+  | { type: "seriesView"; single: boolean }
   | { type: "upscale-now" }
   | { type: "params"; params: Params; draft?: boolean }
   | { type: "view"; view: 0 | 1 | 2 | 4 | 5 | 6; before?: boolean; region?: number; range?: [number, number] }
@@ -113,6 +114,8 @@ export type FromWorker =
   | { type: "lookProfile"; profile: LookProfile; reference: ColorStats; message: string }
   | { type: "gpu-lost"; reason: string }
   | { type: "upscale"; info: UpscaleInfo }
+  /** The open photo is a merged series (undefined: a single photo). */
+  | { type: "series"; info?: SeriesInfo }
   | { type: "error"; message: string; stage?: string };
 
 /** What the photo is at a tapped point: the ingredients of "this object / this colour / this far". */
@@ -128,4 +131,13 @@ export interface PickInfo {
   inMask?: number;
   /** The selection (selectKey) the tapped object already is, when it is one: that piece is deselected. */
   sameAs?: string;
+}
+
+export interface SeriesInfo {
+  frames: number;
+  /** The reference shot's file name. */
+  ref: string;
+  /** Noise σ (linear, mid-tones) of one shot and expected of the merge. */
+  noise: { single: number; merged: number };
+  showing: "merged" | "single";
 }

@@ -112,6 +112,21 @@ interface Session {
   upscale?: UpscaleInfo;
   /** Tap-to-select: the photo's selector, masks by selection, and the texture the renderer samples. */
   sel?: Selections;
+  /** Opened from a series of shots (src/burst): the merge, and the reference shot alone for A/B. */
+  series?: SeriesState;
+}
+
+interface SeriesState {
+  files: File[];
+  refIndex: number;
+  used: number;
+  factor: number;
+  noise: { single: number; merged: number };
+  /** The merged image (and its denoised version) while the single shot is shown. */
+  merged: { tex: GPUTexture; denoised: GPUTexture };
+  /** The reference shot alone, developed on first request. */
+  single?: { tex: GPUTexture; denoised: GPUTexture };
+  showing: "merged" | "single";
 }
 
 interface Selections {
@@ -285,6 +300,8 @@ export class Engine {
     const g = this.gpu;
     if (s.denoised !== s.work.tex) g.release(s.denoised);
     g.release(s.work.tex, s.skin);
+    // A series keeps the image not shown (merge or single shot) too.
+    for (const t of [s.series?.merged, s.series?.single]) if (t) g.release(t.tex, t.denoised);
     if (s.sel) { s.sel.sam.dispose(); g.release(s.sel.tex); this.renderer.selection = undefined; }
     this.releaseProxy(s);
     releaseRefined(g, s.maps);
@@ -300,50 +317,70 @@ export class Engine {
    * it is freed here — a stopped 48 MP open otherwise kept ≈ 600 MB (the decoder
    * worker, the working image, masks) and the next attempt started that far behind.
    */
-  async open(file: File, resolution: "auto" | "full" | "half", autoExposure = false, autoDof = false, upscaleMode: UpscaleMode = "auto", safeAnalysis = false, level?: AnalysisLevel) {
+  async open(file: File, resolution: "auto" | "full" | "half", autoExposure = false, autoDof = false, upscaleMode: UpscaleMode = "auto", safeAnalysis = false, level?: AnalysisLevel, series?: { files: File[]; ref?: number }) {
     const cleanup: Array<() => void> = [];
     let committed = false;
     try {
-      await this.openInner(file, resolution, autoExposure, autoDof, upscaleMode, safeAnalysis, level, (f) => cleanup.push(f), () => { committed = true; });
+      await this.openInner(file, resolution, autoExposure, autoDof, upscaleMode, safeAnalysis, level, (f) => cleanup.push(f), () => { committed = true; }, series);
     } finally {
       if (!committed) for (const f of cleanup.reverse()) { try { f(); } catch { /* already freed */ } }
     }
   }
 
   private async openInner(file: File, resolution: "auto" | "full" | "half", autoExposure: boolean, autoDof: boolean, upscaleMode: UpscaleMode, safeAnalysis: boolean, level: AnalysisLevel | undefined,
-    track: (free: () => void) => void, commit: () => void) {
+    track: (free: () => void) => void, commit: () => void, series?: { files: File[]; ref?: number }) {
     const gen = ++this.generation;
     this.closeSession();
     this.gpu.flushStaging(); // the previous photo's readback sizes
     const P = new Profiler(this.gpu);
     this.profiler = P;
     const gpu = this.gpu;
-    this.progress("decode", file.name);
-    // The file bytes are only needed by the decoder (which copies them): no
-    // reference is kept here, so 30–80 MB can be collected during development.
-    const decoded = await P.time("decode", async () => decodeFile(new Uint8Array(await file.arrayBuffer()), file.name, file.type), (d) => `${d.format} via ${d.source.kind === "rgb" ? d.source.decoder : "LibRaw"}`);
-    track(() => decoded.close());
-    for (const [k, v] of Object.entries(decoded.timings)) this.log(`  ${k}: ${v.toFixed(0)} ms`);
-
     // Working resolution: iPhone memory decides, not desktop assumptions.
+    const factorFor = (w: number, h: number) => {
+      const mp = (w * h) / 1e6;
+      let f = 1;
+      if (resolution === "half") f = 2;
+      else if (resolution === "auto") f = isMobile() && mp > 16 ? 2 : 1;
+      while (Math.max(w, h) / f > gpu.info.maxTextureDimension2D) f++;
+      return f;
+    };
+    let decoded: DecodedImage, work: WorkingImage, seriesInfo: Omit<SeriesState, "merged" | "showing"> | undefined;
+    if (series && series.files.length > 1) {
+      // Several shots of one scene: merged into one working image (src/burst), then opened like a photo.
+      const { mergeSeries } = await import("../burst/burst.ts");
+      const r = await P.time("series merge", () => mergeSeries(gpu, series.files, {
+        factorFor, mode: "clean", ref: series.ref, exposureGain: exposureGainY,
+        progress: (st, d, f) => this.progress(st, d, f), log: (t) => this.log(t), track, cancelled: () => gen !== this.generation,
+      }), (r) => `${r.used} frames ${r.work.width}×${r.work.height}`);
+      decoded = r.decoded; work = r.work; file = r.file;
+      track(() => gpu.release(work.tex));
+      seriesInfo = { files: series.files, refIndex: r.refIndex, used: r.used, factor: r.factor, noise: r.noise };
+      work.log.forEach((l) => this.log(l));
+      upscaleMode = "off"; // the merge is the detail stage
+    } else {
+      this.progress("decode", file.name);
+      // The file bytes are only needed by the decoder (which copies them): no
+      // reference is kept here, so 30–80 MB can be collected during development.
+      decoded = await P.time("decode", async () => decodeFile(new Uint8Array(await file.arrayBuffer()), file.name, file.type), (d) => `${d.format} via ${d.source.kind === "rgb" ? d.source.decoder : "LibRaw"}`);
+      const dec = decoded;
+      track(() => dec.close());
+      for (const [k, v] of Object.entries(decoded.timings)) this.log(`  ${k}: ${v.toFixed(0)} ms`);
+      const src0 = decoded.source;
+      const factor = factorFor(src0.width, src0.height);
+      this.progress("develop", `${src0.width}×${src0.height}${factor > 1 ? ` → 1/${factor}` : ""}`);
+      const w0 = await P.time("raw development", () => develop(gpu, dec, { factor }), (w) => `${w.width}×${w.height}`);
+      work = w0;
+      track(() => gpu.release(w0.tex));
+      work.log.forEach((l) => this.log(l));
+      // The sensor data now lives on the GPU; free the decoder's wasm heap. The
+      // raw view points into that heap, so it must be dropped as well — otherwise
+      // the whole LibRaw memory (≈150 MB for 12 MP, ≈460 MB for 48 MP) stays
+      // alive for as long as the photo is open.
+      decoded.close();
+      decoded.close = () => {};
+      if (decoded.source.kind !== "rgb") decoded.source.data = new Uint16Array(0);
+    }
     const src = decoded.source;
-    const mp = (src.width * src.height) / 1e6;
-    let factor = 1;
-    if (resolution === "half") factor = 2;
-    else if (resolution === "auto") factor = isMobile() && mp > 16 ? 2 : 1;
-    const maxDim = gpu.info.maxTextureDimension2D;
-    while (Math.max(src.width, src.height) / factor > maxDim) factor++;
-    this.progress("develop", `${src.width}×${src.height}${factor > 1 ? ` → 1/${factor}` : ""}`);
-    const work = await P.time("raw development", () => develop(gpu, decoded, { factor }), (w) => `${w.width}×${w.height}`);
-    track(() => gpu.release(work.tex));
-    work.log.forEach((l) => this.log(l));
-    // The sensor data now lives on the GPU; free the decoder's wasm heap. The
-    // raw view points into that heap, so it must be dropped as well — otherwise
-    // the whole LibRaw memory (≈150 MB for 12 MP, ≈460 MB for 48 MP) stays
-    // alive for as long as the photo is open.
-    decoded.close();
-    decoded.close = () => {};
-    if (decoded.source.kind !== "rgb") decoded.source.data = new Uint16Array(0);
     if (gen !== this.generation) return;
 
     // --- reduced analysis image + exposure normalisation gain ------------------
@@ -490,7 +527,8 @@ export class Engine {
     // Atmospheric light: dark-channel estimate is in the analysis encoding → linear working.
     const A = decision.params.dehaze.light.map((v) => srgbEotf(v) / gain) as [number, number, number];
 
-    const s: Session = { name: file.name, file, decoded, work, denoised: work.tex, gain, scene, maps, report, decision, params, lightLinear: A, scale: 1, skin: skinTex };
+    const s: Session = { name: seriesInfo ? `${file.name} + ${seriesInfo.used - 1}` : file.name, file, decoded, work, denoised: work.tex, gain, scene, maps, report, decision, params, lightLinear: A, scale: 1, skin: skinTex };
+    if (seriesInfo) s.series = { ...seriesInfo, merged: { tex: work.tex, denoised: work.tex }, showing: "merged" };
     if (reference && autoExposure) s.calib = { ref: reference.q, rounds: 0, black: false };
     this.s = s;
     commit(); // from here closeSession() frees it
@@ -595,6 +633,7 @@ export class Engine {
     Object.assign(params, buildAutoLayers(params));
     this.post({ type: "analysis", summary: this.summary(file.name), decisions: decision.decisions, auto: decision.params, params, dof: decision.dofSuggestion, exposureSuggestion: decision.exposureSuggestion, autoCurves: decision.autoCurves, cellCoverage: decision.cellCoverage, noDepth: flatDepth ? (scene.log.find((l) => /Depth skipped|Depth unavailable|Scene analysis unavailable/.test(l)) ?? "no depth map") : undefined });
     this.post({ type: "profile", stages: P.stages });
+    this.postSeries();
 
     // --- first preview (before neural restoration) --------------------------------------
     await P.time("preview proxy", () => this.makeProxy());
@@ -763,6 +802,45 @@ export class Engine {
     s.denoised = await P.time("GPU denoise", () => denoiseGPU(gpu, s.work.tex, W, H, s.gain, s.report.noise), () => `${W}×${H}`);
     this.log(`GPU denoise: full frame, noise-adaptive (σ mid ${(s.report.noise.mid * 255).toFixed(2)}/255)`);
     this.dropThumb(); // look previews must see the restored image
+  }
+
+  private postSeries() {
+    const r = this.s?.series;
+    this.post({ type: "series", info: r ? { frames: r.used, ref: r.files[r.refIndex].name, noise: r.noise, showing: r.showing } : undefined });
+  }
+
+  /**
+   * A/B for a merged series: the reference shot alone (developed the same way, with
+   * the app's usual denoise when the photo calls for it) or the merge, under the
+   * same edits. Swaps the working textures; the analysis is shared.
+   */
+  async seriesView(single: boolean) {
+    const s = this.s, r = s?.series;
+    if (!s || !r || (r.showing === "single") === single) return;
+    if (single && !r.single) {
+      this.progress("series single");
+      const { developSingle } = await import("../burst/burst.ts");
+      const w = await developSingle(this.gpu, r.files[r.refIndex], r.factor);
+      if (this.s !== s) { this.gpu.release(w.tex); return; }
+      let dn = w.tex;
+      if (s.decision.plan.denoise) {
+        const noise = noiseProfile(await measureBlocks(this.gpu, w.tex, w.width, w.height, s.gain, 0.02));
+        dn = await denoiseGPU(this.gpu, w.tex, w.width, w.height, s.gain, noise);
+        const m = noise.mid / Math.max(1e-6, s.report.noise.mid);
+        this.log(`series A/B: one shot noise ${(noise.mid * 255).toFixed(2)}/255 vs merge ${(s.report.noise.mid * 255).toFixed(2)}/255 (×${m.toFixed(2)})`);
+      }
+      if (this.s !== s) { this.gpu.release(w.tex, dn); return; }
+      r.single = { tex: w.tex, denoised: dn };
+    }
+    if (r.showing === "merged") r.merged = { tex: s.work.tex, denoised: s.denoised };
+    const use = single ? r.single! : r.merged;
+    s.work = { ...s.work, tex: use.tex };
+    s.denoised = use.denoised;
+    r.showing = single ? "single" : "merged";
+    this.dropThumb();
+    await this.makeProxy();
+    this.postSeries();
+    this.requestRender(true);
   }
 
   private async makeProxy() {
@@ -1576,7 +1654,13 @@ function exposureGain(rgba: Float32Array): number {
   const n = rgba.length / 4;
   const ys = new Float32Array(n);
   for (let i = 0; i < n; i++) ys[i] = Math.max(0, 0.2627 * rgba[i * 4] + 0.678 * rgba[i * 4 + 1] + 0.0593 * rgba[i * 4 + 2]);
-  ys.sort();
+  return exposureGainY(ys);
+}
+
+/** exposureGain from linear luminances. */
+function exposureGainY(y: Float32Array): number {
+  const ys = y.slice().sort();
+  const n = ys.length;
   const p60 = ys[Math.floor(n * 0.6)] || 1e-4;
   const p99 = ys[Math.floor(n * 0.99)] || 1;
   let k = 0.18 / Math.max(p60, 1e-5);

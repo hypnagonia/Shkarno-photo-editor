@@ -8,6 +8,7 @@
  *   npm run memcheck -- --photo IMG_1514.DNG --steps open,select
  *   npm run memcheck -- --browser safari     real WebKit (needs WebGPU: macOS 26)
  *   npm run memcheck -- --no-build
+ *   npm run memcheck -- --photo burst/b3 --steps burst,ab   a series (a folder in .samples)
  *
  * How: `vite preview` serves the production build; the browser opens
  * /?autotest&phone&… (src/autotest.ts), which behaves exactly as on an iPhone
@@ -31,7 +32,9 @@ const browser = opt("browser", "chrome");
 const budget = budgetAll[browser];
 if (!budget) { console.error(`no budget for browser "${browser}"`); process.exit(2); }
 const photos = (opt("photo") ?? budgetAll.photos.join(",")).split(",");
-const steps = opt("steps", budgetAll.steps.join(","));
+const stepsOpt = opt("steps");
+/** Steps for a photo, or for a series (a folder: merged by the "burst" step). */
+const stepsFor = (photo) => stepsOpt ?? (photo.includes("/") ? budgetAll.seriesSteps : budgetAll.steps).join(",");
 const port = Number(opt("port", "5399"));
 const REPORT = ".samples/out/autotest.jsonl";
 
@@ -87,8 +90,10 @@ let failed = false;
 for (const photo of photos) {
   if (!existsSync(`.samples/${photo}`)) { console.log(`skip ${photo}: not in .samples`); continue; }
   rmSync(REPORT, { force: true });
-  const b = launch(`http://localhost:${port}/?autotest&phone&close&photo=${encodeURIComponent(photo)}&steps=${steps}&run=${Date.now()}`);
-  console.log(`\n${photo} (${browser}): ${steps}`);
+  // A folder is a series (merged by the "burst" step); a file is one photo.
+  const what = photo.includes("/") ? `set=${encodeURIComponent(photo)}` : `photo=${encodeURIComponent(photo)}`;
+  const b = launch(`http://localhost:${port}/?autotest&phone&close&${what}&steps=${stepsFor(photo)}${flag("save") ? "&save" : ""}&run=${Date.now()}`);
+  console.log(`\n${photo} (${browser}): ${stepsFor(photo)}`);
   const peaks = new Map(); // step → { page, gpu, tracked }
   let stage = "load", sub = "", done = "", message = "", gpuBase = -1, seen = 0;
   const subPeaks = new Map(); // "step › engine stage" → page MB (--timeline)

@@ -490,3 +490,10 @@ header.top .push { margin-left: auto; }
 .rangebar { position: relative; height: 14px; margin: 8px 9px 10px; background: linear-gradient(90deg, #000, #fff); border: 1px solid var(--line); touch-action: pan-y; cursor: pointer; -webkit-user-select: none; user-select: none; }
 .rangebar .rb-off { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(45deg, rgba(128,128,128,.55) 0 3px, transparent 3px 6px); pointer-events: none; }
 .rangebar .rb-knob { position: absolute; top: -5px; width: 12px; height: 22px; margin-left: -6px; background: var(--text); border: 2px solid var(--bg); box-sizing: border-box; pointer-events: none; }
+
+/* Series (several photos opened at once) */
+.series-pane { padding: 14px 16px calc(16px + var(--safe-b)); display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+.series-pane .group-title { margin-top: 8px; }
+.series-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; flex-wrap: wrap; }
+.series-btn.on { background: var(--text); color: var(--bg); }
+@media (min-width: 900px) { .series-sheet { justify-content: center; align-items: center; } .series-sheet .pane { width: min(520px, 92vw); } }

@@ -7,6 +7,7 @@
  * phones.
  *
  *   ?autotest&photo=IMG_1514.DNG&steps=open,select,blur,export,reopen
+ *   ?autotest&set=burst/b3&steps=burst,ab,export   (a series: merged, then A/B)
  */
 import type { FromWorker, ToWorker } from "./engine/protocol.ts";
 import type { Params } from "./decision/params.ts";
@@ -14,6 +15,8 @@ import { makeLayer } from "./layers/model.ts";
 
 export interface AutotestApp {
   openFile: (f: File) => void;
+  /** Opens several shots as one merged series. */
+  openSeries: (files: File[]) => void;
   params: () => Params | undefined;
   pushParams: () => void;
   send: (m: ToWorker) => void;
@@ -87,11 +90,46 @@ export async function runAutotest(app: AutotestApp) {
     await settle();
     await report(`${label}:done`, { ...(await mem()), js: await jsMem() });
   };
+  /** A series from .samples/<set>/ (every file in it), merged. */
+  const burst = async () => {
+    const set = q.get("set") ?? "burst/b3";
+    await mem();
+    await report("burst:start", { set });
+    const names = await (await fetch(`/__samples/${set}/`)).json() as string[];
+    const files = await Promise.all(names.map(async (n) => new File([await (await fetch(`/__samples/${set}/${n}`)).blob()], n)));
+    const done = finalPreview("burst");
+    app.openSeries(files);
+    await done;
+    await settle(3000);
+    await report("burst:done", { profile: lastProfile, frames: files.length, ...(await mem()), js: await jsMem() });
+  };
+  /** A/B of a series: the single shot, then back to the merge. */
+  const ab = async () => {
+    await mem();
+    await report("ab:start");
+    for (const single of [true, false]) {
+      const done = finalPreview("ab");
+      app.send({ type: "seriesView", single });
+      await done;
+      await settle(500);
+      if (q.has("save")) await saveExport(`ab-${single ? "single" : "merged"}`);
+    }
+    await report("ab:done", { ...(await mem()), js: await jsMem() });
+  };
+  /** Exports and keeps the file in .samples/out (for looking at results). */
+  const saveExport = async (name: string) => {
+    const done = waitFor((m) => m.type === "exported", "export");
+    app.send({ type: "export", format: "jpeg", quality: 0.95, space: "p3" });
+    const m = await done;
+    if (m.type === "exported") await fetch(`/__debug/save?name=${name}.jpg`, { method: "POST", body: m.blob });
+  };
   const center = { kind: "select" as const, points: [[0.5, 0.5, 1]] as Array<[number, number, 0 | 1]>, invert: false, feather: 1, density: 1 };
   try {
     await report("start", { ua: navigator.userAgent, gpu: "gpu" in navigator, isolated: crossOriginIsolated });
     for (const s of steps) {
       if (s === "open") await open("open");
+      else if (s === "burst") await burst();
+      else if (s === "ab") await ab();
       else if (s === "reopen") await open("reopen");
       else if (s === "select") await addLayer("select", makeLayer("basic", "Autotest select", { mask: center, params: { exposure: 0.4, temp: 0, tint: 0, saturation: 0, vibrance: 0, hue: 0 } }));
       else if (s === "blur") await addLayer("blur", makeLayer("blur", "Autotest blur", { mask: { ...center, invert: true }, params: { amount: 0.5 } }));
