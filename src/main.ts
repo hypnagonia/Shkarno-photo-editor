@@ -246,9 +246,15 @@ const moreBtn = iconBtn("more", t("ui.more"));
 undoBtn.onclick = () => { flushCommit(); stepHistory(history.undo()); };
 redoBtn.onclick = () => { flushCommit(); stepHistory(history.redo()); };
 moreBtn.onclick = () => (moreEl.hidden ? showPane(moreId) : (moreEl.hidden = true));
+// Check in one tap (the finished photo's technical findings); after a check it shows how many mistakes.
+const checkBtn = iconBtn("check", t("tab.check"));
+checkBtn.classList.add("check-btn");
+const checkBadge = el("span", { class: "check-badge", hidden: "" });
+checkBtn.append(checkBadge);
+checkBtn.onclick = () => (!moreEl.hidden && moreId === "check" ? (moreEl.hidden = true) : showPane("check"));
 header.insertBefore(undoBtn, exportTop);
 header.insertBefore(redoBtn, exportTop);
-header.append(moreBtn);
+header.append(checkBtn, moreBtn);
 undoBtn.disabled = redoBtn.disabled = true;
 stage.append(fsExit);
 
@@ -741,6 +747,7 @@ function renderHistory() {
 }
 function pushParams() {
   checkStale = true;
+  checkBadge.hidden = true; // the count belongs to the photo as it was checked
   if (!params) return;
   scheduleCommit(nextLabel || pendingLabel || t("hist.develop"));
   nextLabel = "";
@@ -1128,6 +1135,8 @@ let checkResult: { items: CheckItem[]; rgba: Uint8Array; w: number; h: number } 
 /** The edit changed since the last check (the tab re-checks when opened). */
 let checkStale = true;
 let checkShown: CheckItem["id"] | undefined;
+/** Fixes are still being worked out (they arrive one by one after the findings). */
+let checkSolving = false;
 const checkRun = el("button", { class: "btn small primary", text: t("check.run") });
 const checkSummary = el("span", { class: "muted check-summary" });
 const checkView = el("canvas", { class: "check-view", hidden: "" });
@@ -1146,7 +1155,11 @@ function checkText(it: CheckItem): string {
   v.where = it.v.where ? t("check.where", { name: tOr(`group.${it.v.where}`, String(it.v.where)).toLowerCase() }) : "";
   if (it.id === "skin" && it.v.issue) v.issue = tOr(`check.issue.${it.v.issue}`, String(it.v.issue));
   if (it.id === "cast") v.tint = tOr(`check.tint.${it.v.tint}`, String(it.v.tint));
-  if (it.id === "exposure") v.dir = tOr(`check.dir.${it.v.dir}`, String(it.v.dir));
+  if (it.id === "exposure") {
+    v.dir = tOr(`check.dir.${it.v.dir}`, String(it.v.dir));
+    const name = tOr(`check.scene.${it.v.scene}`, String(it.v.scene));
+    v.scene = it.v.ev !== "" && it.v.ev !== undefined ? t("check.sceneEv", { name, ev: it.v.ev }) : name;
+  }
   if (it.id === "contrast" && it.v.issue) return tOr(`check.contrast.${it.v.issue}`, "", v);
   return tOr(`check.${it.id}.${it.level}`, "", v);
 }
@@ -1165,7 +1178,11 @@ function pctFix(v: number) { return `${v > 0 ? "+" : ""}${Math.round(v * 100)}`;
 /** A finding's fix: the exact change (worked out by the engine) with Apply, or the general advice. */
 function checkFixEl(it: CheckItem): HTMLElement {
   const box = el("div", { class: "check-fix" });
-  if (!it.fix?.length || !params) { box.textContent = t(`check.${it.id}.fix`); return box; }
+  if (!it.fix?.length || !params) {
+    box.textContent = checkSolving && it.err !== undefined ? t("check.solving") : t(`check.${it.id}.fix`);
+    box.classList.toggle("solving", checkSolving && it.err !== undefined);
+    return box;
+  }
   const lines = it.fix.map((c) => {
     if ("layer" in c) {
       const l = params!.layers?.find((x) => x.id === c.layer);
@@ -1200,6 +1217,9 @@ function renderCheck() {
   if (!r) { checkList.replaceChildren(); checkSummary.textContent = params ? "" : t("check.noPhoto"); return; }
   const count = (l: string) => r.items.filter((i) => i.level === l).length;
   checkSummary.textContent = t("check.summary", { bad: count("bad"), warn: count("warn"), ok: count("ok") });
+  checkBadge.textContent = String(count("bad") + count("warn"));
+  checkBadge.hidden = count("bad") + count("warn") === 0;
+  checkBadge.classList.toggle("bad", count("bad") > 0);
   const order = { bad: 0, warn: 1, ok: 2 } as const;
   checkList.replaceChildren(...[...r.items].sort((a, b) => order[a.level] - order[b.level]).map((it) => {
     const row = el("div", { class: `check-item ${it.level}` + (checkShown === it.id ? " on" : "") + (it.mask ? " where" : "") },
@@ -1636,6 +1656,12 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       checkResult = m;
       checkStale = false;
       checkShown = undefined;
+      checkSolving = true;
+      renderCheck();
+      break;
+    case "checkFix":
+      if (m.done) checkSolving = false;
+      else if (checkResult && m.id) { const it = checkResult.items.find((i) => i.id === m.id); if (it) { it.fix = m.fix; it.fixPartial = m.partial; } }
       renderCheck();
       break;
     case "pick":

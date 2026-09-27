@@ -57,3 +57,19 @@ test("banding (steps in a smooth gradient) is found", () => {
   const r = byId(checkPhoto({ final, before }));
   assert.notEqual(r.banding.level, "ok", JSON.stringify(r.banding.v));
 });
+
+test("exposure is judged for the scene: a dark photo is right at night, wrong in daylight", async () => {
+  const { sceneKind } = await import("../src/analysis/check.ts");
+  assert.equal(sceneKind(3.5, 0.3, 0), "night");
+  assert.equal(sceneKind(8, 0.5, 0), "indoor");
+  assert.equal(sceneKind(11, 0.5, 0.3), "overcast");
+  assert.equal(sceneKind(15, 0.7, 0.2), "bright");
+  assert.equal(sceneKind(undefined, 0.2, 0), "night"); // no settings: the camera's rendering decides
+  // A dark photo (median ≈ 0.3 L): natural for night, too dark for daylight.
+  const dark = scene((x) => [-45 + x * 0 , -45, -45]);
+  const night = byId(checkPhoto({ final: dark, before: dark, scene: { ev: 4 } }));
+  const day = byId(checkPhoto({ final: dark, before: dark, scene: { ev: 13 } }));
+  assert.equal(night.exposure.level, "ok", JSON.stringify(night.exposure.v));
+  assert.notEqual(day.exposure.level, "ok", JSON.stringify(day.exposure.v));
+  assert.equal(day.exposure.v.dir, "dark");
+});

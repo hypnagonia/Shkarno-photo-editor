@@ -110,6 +110,9 @@ async function handle(m: ToWorker) {
     case "check": {
       const r = await engine.check();
       post({ type: "check", ...r }, [r.rgba.buffer, ...r.items.flatMap((i) => (i.mask ? [i.mask.buffer] : []))]);
+      // The fixes as a job of their own (edits are not held up), each sent when found.
+      void engine.exclusive(() => engine.solveCheckFixes((id, fix, partial) => post({ type: "checkFix", id, fix, partial })))
+        .catch(() => undefined).then(() => post({ type: "checkFix", done: true }));
       break;
     }
     case "palette":

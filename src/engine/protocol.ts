@@ -1,3 +1,4 @@
+import type { FixChange } from "../analysis/checkFix.ts";
 import type { CheckItem } from "../analysis/check.ts";
 import type { Region } from "../decision/params.ts";
 import type { AnalysisLevel } from "../neural/scene.ts";
@@ -104,6 +105,8 @@ export type FromWorker =
   | { type: "pick"; info?: PickInfo }
   | { type: "check"; items: CheckItem[]; rgba: Uint8Array; w: number; h: number }
   | { type: "mem"; liveMB: number; peakMB: number }
+  /** A worked-out fix for a finding of the last check; `done` when there are no more. */
+  | { type: "checkFix"; id?: CheckItem["id"]; fix?: FixChange[]; partial?: boolean; done?: boolean }
   | { type: "lookProfile"; profile: LookProfile; reference: ColorStats; message: string }
   | { type: "gpu-lost"; reason: string }
   | { type: "upscale"; info: UpscaleInfo }

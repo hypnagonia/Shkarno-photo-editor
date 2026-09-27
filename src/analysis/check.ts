@@ -20,6 +20,8 @@ export interface CheckInput {
   before: CheckImage;
   /** Scene analysis: group probabilities (plane per group) and the group names. */
   seg?: { width: number; height: number; probs: Float32Array; groups: readonly string[] };
+  /** The scene's light level: EV at ISO 100 from the photo's exposure settings (absent when unknown). */
+  scene?: { ev?: number };
 }
 export type CheckLevel = "ok" | "warn" | "bad";
 export interface CheckItem {
@@ -115,6 +117,28 @@ export type CheckId = CheckItem["id"];
 export type CheckPlanes = Px;
 export const planesOf = (img: CheckImage): CheckPlanes => toLab(img);
 
+/** Kinds of scene by their light, and the median brightness (OkLab L) that looks natural for each. */
+export type SceneKind = "night" | "dim" | "indoor" | "overcast" | "day" | "bright";
+export const SCENE_BAND: Record<SceneKind, [number, number]> = {
+  night: [0.22, 0.4], dim: [0.32, 0.5], indoor: [0.42, 0.6], overcast: [0.46, 0.63], day: [0.48, 0.67], bright: [0.58, 0.8],
+};
+/**
+ * The scene, from its light level (EV at ISO 100, from shutter, aperture and ISO:
+ * sun ≈ 15, overcast ≈ 12, indoors ≈ 7–9, night streets ≈ 3–5) and the camera's own
+ * rendering; without exposure settings (screenshots, re-saved files) from the
+ * camera's rendering alone.
+ */
+export function sceneKind(ev: number | undefined, cameraMedian: number, skyShare: number): SceneKind {
+  if (ev === undefined || !Number.isFinite(ev)) {
+    return cameraMedian < 0.26 ? "night" : cameraMedian < 0.38 ? "dim" : cameraMedian > 0.7 ? "bright" : "day";
+  }
+  if (ev < 5) return "night";
+  if (ev < 7.5) return "dim";
+  if (ev < 10) return skyShare > 0.08 ? "overcast" : "indoor";
+  if (ev < 12.5) return skyShare > 0.08 ? "overcast" : "day";
+  return ev >= 14 && cameraMedian > 0.55 ? "bright" : "day";
+}
+
 export function checkPhoto(inp: CheckInput, only?: CheckId, beforePlanes?: CheckPlanes): CheckItem[] {
   const { w, h } = inp.final;
   const n = w * h;
@@ -198,13 +222,23 @@ export function checkPhoto(inp: CheckInput, only?: CheckId, beforePlanes?: Check
       items.push({ id: "cast", level, err: shift - 0.01, v: { tint, amount: Math.round(shift * 1000) } });
     }
   }
-  // ---- exposure: the median brightness, versus the camera.
+  // ---- exposure: judged for the kind of scene (a night shot should look like night,
+  //      snow bright), not against a fixed middle: the scene's light level (EV from the
+  //      photo's exposure settings) and the camera's own rendering decide the scene.
   if (want("exposure")) {
     const med = quantile(F.L, 0.5), cam = quantile(B.L, 0.5);
-    const d = med - cam;
-    const level: CheckLevel = med < 0.28 || med > 0.86 ? "bad" : med < 0.36 || med > 0.8 || Math.abs(d) > 0.15 ? "warn" : "ok";
-    // Back to within 0.03 of the camera's median, from whichever side it is.
-    items.push({ id: "exposure", level, err: (med >= cam ? med - cam : cam - med) - 0.03, v: { median: Math.round(med * 100), camera: Math.round(cam * 100), dir: med < cam ? "darker" : "brighter" } });
+    let sky = 0;
+    if (inp.seg) { const g = inp.seg.groups.indexOf("sky"), pl = inp.seg.width * inp.seg.height; if (g >= 0) { for (let i = 0; i < pl; i++) sky += inp.seg.probs[g * pl + i]; sky /= pl; } }
+    const kind = sceneKind(inp.scene?.ev, cam, sky);
+    const [lo, hi] = SCENE_BAND[kind];
+    const dist = med < lo ? lo - med : med > hi ? med - hi : 0;
+    const level: CheckLevel = dist === 0 ? "ok" : dist <= 0.06 ? "warn" : "bad";
+    // Into the scene's range, a little inside it (not the edge), from whichever side.
+    const err = med < lo ? lo + 0.03 - med : med > hi ? med - (hi - 0.03) : -1;
+    items.push({ id: "exposure", level, err, v: {
+      scene: kind, ev: inp.scene?.ev !== undefined ? Math.round(inp.scene.ev * 10) / 10 : "", median: Math.round(med * 100),
+      lo: Math.round(lo * 100), hi: Math.round(hi * 100), camera: Math.round(cam * 100), dir: med < lo ? "dark" : "bright",
+    } });
   }
   // ---- contrast: tonal range, and whether there are real blacks and whites.
   if (want("contrast")) {

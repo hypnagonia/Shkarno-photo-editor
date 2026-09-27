@@ -57,8 +57,17 @@ import { isPhone, phoneForced } from "../device.ts";
 import { levelsByArea, selectionMask } from "../refine/selection.ts";
 import { selectKey, type MaskShape } from "../layers/model.ts";
 import { liveLayers } from "../layers/gpu.ts";
-import { checkPhoto, planesOf, type CheckItem } from "../analysis/check.ts";
-import { getPath, leversFor, setPath, stepOf, type FixChange } from "../analysis/checkFix.ts";
+import type { CheckItem, CheckInput } from "../analysis/check.ts";
+import type { FixChange } from "../analysis/checkFix.ts";
+// The check's code is loaded on the first check (src/analysis/check*.ts): not part of opening a photo.
+const checkCode = () => Promise.all([import("../analysis/check.ts"), import("../analysis/checkFix.ts")]);
+
+/** The scene's light level (EV at ISO 100) from the photo's exposure settings, when they are physically sensible (resized or re-saved files can carry junk). */
+function sceneEV(m: { fNumber?: number; exposureTime?: number; iso?: number }): number | undefined {
+  const ok = m.fNumber && m.exposureTime && m.iso && m.fNumber >= 0.9 && m.fNumber <= 32 && m.exposureTime >= 1 / 32000 && m.exposureTime <= 60 && m.iso >= 12 && m.iso <= 409600;
+  const ev = ok ? Math.log2((m.fNumber! * m.fNumber!) / m.exposureTime!) - Math.log2(m.iso! / 100) : NaN;
+  return ev >= -6 && ev <= 21 ? ev : undefined;
+}
 import { inverse, mul, mulVec } from "../color/mat3.ts";
 import { P3_D65, SRGB, rgbToXYZ } from "../color/spaces.ts";
 import type { Region } from "../decision/params.ts";
@@ -454,13 +463,7 @@ export class Engine {
       referred: work.referred,
       isProRaw: report.isProRaw,
       iso: decoded.meta.iso,
-      sceneEV: (() => {
-        // Only physically sensible settings (resized or re-saved files can carry junk).
-        const m = decoded.meta;
-        const ok = m.fNumber && m.exposureTime && m.iso && m.fNumber >= 0.9 && m.fNumber <= 32 && m.exposureTime >= 1 / 32000 && m.exposureTime <= 60 && m.iso >= 12 && m.iso <= 409600;
-        const ev = ok ? Math.log2((m.fNumber! * m.fNumber!) / m.exposureTime!) - Math.log2(m.iso! / 100) : NaN;
-        return ev >= -6 && ev <= 21 ? ev : undefined;
-      })(),
+      sceneEV: sceneEV(decoded.meta),
       autoExposure,
       solveNeutral: colorInput ? (n) => neutralToTempTint(colorInput, n) : undefined,
       referenceExposure,
@@ -1366,9 +1369,20 @@ export class Engine {
     const final = await read(p, p.enable.dof && p.dof.strength > 0);
     const before = await read(this.cameraParams(), false);
     const seg = { ...s.scene.seg, groups: GROUPS };
-    const items = checkPhoto({ final: { rgba: final, w: t.w, h: t.h }, before: { rgba: before, w: t.w, h: t.h }, seg });
-    await this.solveFixes(s, items, seg);
+    const [{ checkPhoto }] = await checkCode();
+    const items = checkPhoto({ final: { rgba: final, w: t.w, h: t.h }, before: { rgba: before, w: t.w, h: t.h }, seg, scene: { ev: sceneEV(s.decoded.meta) } });
+    // The fixes are worked out next, as their own job (solveCheckFixes): the findings show at once.
+    this.lastCheck = { s, items: items.map((i) => ({ ...i, mask: undefined })), seg, scene: { ev: sceneEV(s.decoded.meta) } };
     return { items, rgba: final, w: t.w, h: t.h };
+  }
+  private lastCheck?: { s: Session; items: CheckItem[]; seg: NonNullable<CheckInput["seg"]>; scene: CheckInput["scene"] };
+
+  /** The fixes for the last check's findings, each reported as soon as it is worked out. */
+  async solveCheckFixes(onFix: (id: CheckItem["id"], fix: FixChange[], partial: boolean) => void) {
+    const c = this.lastCheck;
+    this.lastCheck = undefined;
+    if (!c || c.s !== this.s) return; // another photo since
+    await this.solveFixes(c.s, c.items, c.seg, c.scene, (it) => onFix(it.id, it.fix!, !!it.fixPartial));
   }
 
   /**
@@ -1379,9 +1393,10 @@ export class Engine {
    * edge of "fine". If no control gets there, the layer whose opacity does; failing
    * that, the control that helps most (a partial fix).
    */
-  private async solveFixes(s: Session, items: CheckItem[], seg: NonNullable<Parameters<typeof checkPhoto>[0]["seg"]>) {
+  private async solveFixes(s: Session, items: CheckItem[], seg: NonNullable<CheckInput["seg"]>, scene: CheckInput["scene"], onFix: (it: CheckItem) => void) {
     const todo = items.filter((i) => i.level !== "ok" && i.err !== undefined);
     if (!todo.length) return;
+    const [{ checkPhoto, planesOf }, { getPath, leversFor, setPath, stepOf }] = await checkCode();
     const t0 = performance.now();
     let renders = 0;
     const t = await this.ensureThumb(768);
@@ -1394,7 +1409,7 @@ export class Engine {
     const beforeImg = await render(this.cameraParams());
     const beforePlanes = planesOf(beforeImg);
     const errWith = async (id: CheckItem["id"], p: Params) =>
-      checkPhoto({ final: await render(p), before: beforeImg, seg }, id, beforePlanes).find((i) => i.id === id)?.err ?? -1;
+      checkPhoto({ final: await render(p), before: beforeImg, seg, scene }, id, beforePlanes).find((i) => i.id === id)?.err ?? -1;
     const base = s.params;
     for (const it of todo) {
       const e0 = await errWith(it.id, base);
@@ -1427,7 +1442,7 @@ export class Engine {
         it.fix = [{ path: lv.path, from: v0, to: Math.round(to * 1000) / 1000 }];
         break;
       }
-      if (it.fix) continue;
+      if (it.fix) { onFix(it); continue; }
       // No control does it: the layer that does (its opacity; 0 = hide it).
       const live = liveLayers(base.layers ?? [], base.autoCurves ?? 1, base.enable);
       for (const L of [...live].reverse()) {
@@ -1439,6 +1454,7 @@ export class Engine {
         break;
       }
       if (!it.fix && best) { it.fix = [best.change]; it.fixPartial = true; }
+      if (it.fix) onFix(it);
     }
     this.log(`check fixes: ${todo.length} findings, ${renders} renders at ${t.w}×${t.h}, ${Math.round(performance.now() - t0)} ms`);
   }
