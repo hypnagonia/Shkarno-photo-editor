@@ -1,3 +1,4 @@
+import type { CheckItem } from "../analysis/check.ts";
 import type { Region } from "../decision/params.ts";
 import type { AnalysisLevel } from "../neural/scene.ts";
 import type { AutoCurveBands } from "../decision/autoCurves.ts";
@@ -68,6 +69,8 @@ export type ToWorker =
   | { type: "importLook"; name: string; text: string }
   | { type: "thumbs"; profiles: LookProfile[]; long: number }
   | { type: "palette" }
+  /** Check the finished photo for technical mistakes. */
+  | { type: "check" }
   /** What is under a tap on the photo (x, y: 0…1 of the picture), for building a mask from it. */
   | { type: "pick"; x: number; y: number; /** The layer (index among the live layers) whose mask the tap edits. */ layer?: number; /** A tap selects an object (tap-to-select). */ object?: boolean }
   | { type: "reference"; file: File; mode: "create" | "match"; amount: number }
@@ -97,6 +100,7 @@ export type FromWorker =
   | { type: "thumbs"; items: Array<{ id: string; width: number; height: number; data: ArrayBuffer }> }
   | { type: "palette"; stats: ColorStats }
   | { type: "pick"; info?: PickInfo }
+  | { type: "check"; items: CheckItem[]; rgba: Uint8Array; w: number; h: number }
   | { type: "lookProfile"; profile: LookProfile; reference: ColorStats; message: string }
   | { type: "gpu-lost"; reason: string }
   | { type: "upscale"; info: UpscaleInfo }

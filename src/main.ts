@@ -24,6 +24,7 @@ import { autotestAllowed } from "./autotest.ts";
 import { forcePhone, isPhone } from "./device.ts";
 import type { AnalysisLevel } from "./neural/scene.ts";
 import type { ColorStats } from "./looks/palette.ts";
+import type { CheckItem } from "./analysis/check.ts";
 import { installTouchSliders } from "./ui/touchSlider.ts";
 import { makeLayer } from "./layers/model.ts";
 
@@ -104,7 +105,7 @@ function addPane(id: string, _label?: string) {
   return p;
 }
 // "More": information, export settings, upscaling, history and debugging, in one overlay.
-const MORE = ["auto", "history", "export", "upscale", "debug"] as const;
+const MORE = ["check", "auto", "history", "export", "upscale", "debug"] as const;
 const moreEl = el("div", { class: "more", hidden: "" });
 const moreTabs = el("div", { class: "seg" });
 const moreBody = el("div", { class: "pane" });
@@ -114,7 +115,7 @@ moreClose.onclick = () => (moreEl.hidden = true);
 moreEl.onclick = (e) => { if (e.target === moreEl) moreEl.hidden = true; }; // tap outside closes
 moreEl.append(el("div", { class: "more-head" }, moreTabs, themePill, langPill, moreClose), moreBody);
 app.append(moreEl);
-let moreId: (typeof MORE)[number] = "auto";
+let moreId: (typeof MORE)[number] = "check";
 function showPane(id: string) {
   if ((MORE as readonly string[]).includes(id)) {
     moreId = id as (typeof MORE)[number];
@@ -125,6 +126,7 @@ function showPane(id: string) {
       return b;
     }));
     if (moreId === "history") renderHistory();
+    if (moreId === "check" && checkStale) runCheck();
     moreBody.replaceChildren(panes[moreId]);
   }
 }
@@ -140,6 +142,7 @@ const exportPane = addPane("export");
 const debugPane = addPane("debug");
 const autoPane = addPane("auto");
 const historyPane = addPane("history");
+const checkPane = addPane("check");
 /** Develop: the RAW development (exposure, tone, colour, detail). Blur: depth of field, its own card. */
 const developEl = el("div", { class: "develop" }, adjustPane);
 const blurEl = el("div", { class: "develop" }, depthPane);
@@ -737,6 +740,7 @@ function renderHistory() {
   })));
 }
 function pushParams() {
+  checkStale = true;
   if (!params) return;
   scheduleCommit(nextLabel || pendingLabel || t("hist.develop"));
   nextLabel = "";
@@ -1119,6 +1123,68 @@ function renderBands() {
 void bandChips;
 renderBands();
 
+// Check: the finished photo looked at for technical mistakes (src/analysis/check.ts).
+let checkResult: { items: CheckItem[]; rgba: Uint8Array; w: number; h: number } | undefined;
+/** The edit changed since the last check (the tab re-checks when opened). */
+let checkStale = true;
+let checkShown: CheckItem["id"] | undefined;
+const checkRun = el("button", { class: "btn small primary", text: t("check.run") });
+const checkSummary = el("span", { class: "muted check-summary" });
+const checkView = el("canvas", { class: "check-view", hidden: "" });
+const checkList = el("div", { class: "check-list" });
+checkPane.append(el("div", { class: "actions check-head" }, checkRun, checkSummary), checkView, checkList);
+checkRun.onclick = () => runCheck();
+function runCheck() {
+  if (!params) { checkSummary.textContent = t("check.noPhoto"); return; }
+  checkRun.disabled = true;
+  checkSummary.textContent = t("check.running");
+  send({ type: "check" });
+}
+const LEVEL_ICON = { bad: "✗", warn: "!", ok: "✓" } as const;
+function checkText(it: CheckItem): string {
+  const v: Record<string, string | number> = { ...it.v };
+  v.where = it.v.where ? t("check.where", { name: tOr(`group.${it.v.where}`, String(it.v.where)).toLowerCase() }) : "";
+  if (it.id === "skin" && it.v.issue) v.issue = tOr(`check.issue.${it.v.issue}`, String(it.v.issue));
+  if (it.id === "cast") v.tint = tOr(`check.tint.${it.v.tint}`, String(it.v.tint));
+  if (it.id === "exposure") v.dir = tOr(`check.dir.${it.v.dir}`, String(it.v.dir));
+  if (it.id === "contrast" && it.v.issue) return tOr(`check.contrast.${it.v.issue}`, "", v);
+  return tOr(`check.${it.id}.${it.level}`, "", v);
+}
+function renderCheck() {
+  checkRun.disabled = false;
+  const r = checkResult;
+  checkView.hidden = true;
+  if (!r) { checkList.replaceChildren(); checkSummary.textContent = params ? "" : t("check.noPhoto"); return; }
+  const count = (l: string) => r.items.filter((i) => i.level === l).length;
+  checkSummary.textContent = t("check.summary", { bad: count("bad"), warn: count("warn"), ok: count("ok") });
+  const order = { bad: 0, warn: 1, ok: 2 } as const;
+  checkList.replaceChildren(...[...r.items].sort((a, b) => order[a.level] - order[b.level]).map((it) => {
+    const row = el("div", { class: `check-item ${it.level}` + (checkShown === it.id ? " on" : "") + (it.mask ? " where" : "") },
+      el("span", { class: "check-icon", text: LEVEL_ICON[it.level] }),
+      el("div", { class: "check-body" },
+        el("div", { class: "check-title", text: t(`check.t.${it.id}`) }),
+        el("div", { class: "check-text", text: checkText(it) }),
+        ...(it.level !== "ok" ? [el("div", { class: "check-fix", text: t(`check.${it.id}.fix`) })] : [])));
+    if (it.mask) row.onclick = () => { checkShown = checkShown === it.id ? undefined : it.id; renderCheck(); };
+    return row;
+  }));
+  const shown = r.items.find((i) => i.id === checkShown && i.mask);
+  if (shown?.mask) {
+    // The photo with the finding in red (50 %), everything else a little dimmed.
+    checkView.width = r.w; checkView.height = r.h;
+    const img = new ImageData(r.w, r.h);
+    for (let i = 0, j = 0; i < r.w * r.h; i++, j += 4) {
+      const on = shown.mask[i] === 1;
+      img.data[j] = on ? (r.rgba[j] + 255) / 2 : r.rgba[j] * 0.7;
+      img.data[j + 1] = on ? r.rgba[j + 1] * 0.4 : r.rgba[j + 1] * 0.7;
+      img.data[j + 2] = on ? r.rgba[j + 2] * 0.4 : r.rgba[j + 2] * 0.7;
+      img.data[j + 3] = 255;
+    }
+    checkView.getContext("2d")!.putImageData(img, 0, 0);
+    checkView.hidden = false;
+  }
+}
+
 // Export
 const fmtSel = el("select", {}, el("option", { value: "jpeg", text: "JPEG" }), el("option", { value: "jpeg-hdr", text: t("exp.jpegHdr") }), el("option", { value: "heic", text: "HEIC" }), el("option", { value: "tiff16", text: t("exp.tiff") }), el("option", { value: "dng", text: t("exp.dng") }));
 const spaceSel = el("select", {}, el("option", { value: "p3", text: "Display P3" }), el("option", { value: "srgb", text: "sRGB" }));
@@ -1397,6 +1463,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       busy = false;
       break;
     case "analysis":
+      checkResult = undefined; checkStale = true; renderCheck();
       noteAnalysisStage();
       opening = false;
       restored = false;
@@ -1522,6 +1589,12 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       lookPanel.onPalette(m.stats);
       for (const f of paletteWaiters.splice(0)) f(m.stats);
       break;
+    case "check":
+      checkResult = m;
+      checkStale = false;
+      checkShown = undefined;
+      renderCheck();
+      break;
     case "pick":
       // A changed mask is "done" when the photo shows it (a first selection is worked
       // out while rendering: seconds on a phone); otherwise now.
@@ -1533,6 +1606,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       break;
     case "error":
       if (pickBusy) pickDone();
+      checkRun.disabled = false;
       noteAnalysisStage();
       opening = false;
       showError(m.message);

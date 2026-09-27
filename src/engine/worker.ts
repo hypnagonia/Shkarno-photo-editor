@@ -104,6 +104,11 @@ async function handle(m: ToWorker) {
       post({ type: "pick", info });
       break;
     }
+    case "check": {
+      const r = await engine.check();
+      post({ type: "check", ...r }, [r.rgba.buffer, ...r.items.flatMap((i) => (i.mask ? [i.mask.buffer] : []))]);
+      break;
+    }
     case "palette":
       post({ type: "palette", stats: await engine.palette() });
       break;

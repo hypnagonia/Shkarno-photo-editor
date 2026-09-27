@@ -57,6 +57,7 @@ import { isPhone, phoneForced } from "../device.ts";
 import { levelsByArea, selectionMask } from "../refine/selection.ts";
 import { selectKey, type MaskShape } from "../layers/model.ts";
 import { liveLayers } from "../layers/gpu.ts";
+import { checkPhoto, type CheckItem } from "../analysis/check.ts";
 import { inverse, mul, mulVec } from "../color/mat3.ts";
 import { P3_D65, SRGB, rgbToXYZ } from "../color/spaces.ts";
 import type { Region } from "../decision/params.ts";
@@ -789,8 +790,12 @@ export class Engine {
 
   private effectiveParams(): Params {
     const s = this.s!;
-    if (!this.before) return s.params;
-    // "Before": camera rendering only — exposure/WB from the camera, tone curve, nothing adaptive.
+    return this.before ? this.cameraParams() : s.params;
+  }
+
+  /** "Before": camera rendering only — exposure/WB from the camera, tone curve, nothing adaptive, no edits. */
+  private cameraParams(): Params {
+    const s = this.s!;
     const p = structuredClone(s.params);
     const e = p.enable;
     e.denoise = false; e.localTone = false; e.semantic = false; e.dehaze = false; e.sharpen = false; e.dof = false; e.curves = false;
@@ -1337,6 +1342,28 @@ export class Engine {
     // No level chosen: SAM's own pick, its most confident of the three readings.
     const k = m.level === undefined ? [1, 2, 3].reduce((a, b) => (iou[b] > iou[a] ? b : a)) : levelsByArea(low)[m.level];
     return selectionMask(low, k, st.sam.dims, w, h, st.guide);
+  }
+
+  /**
+   * Check: the edit as exported and the camera's rendering, both at 1024 px, looked
+   * at for technical mistakes (src/analysis/check.ts). Returns the findings and the
+   * edit's pixels (to show where a finding is).
+   */
+  async check(): Promise<{ items: CheckItem[]; rgba: Uint8Array; w: number; h: number }> {
+    const s = this.s;
+    if (!s) throw new Error("No photo open");
+    await this.ensureSelections(s, s.params);
+    const t = await this.ensureThumb(1024);
+    const src = { base: t.base, denoised: t.denoised, width: t.w, height: t.h, fullWidth: s.work.width };
+    const read = async (p: Params, dof: boolean) => {
+      const r = await this.renderer.render(src, s.maps, p, { wb: this.wbFor(p), gain: s.gain, lightLinear: s.lightLinear, output: "p38", dither: false }, dof);
+      return new Uint8Array(await this.gpu.readTexture(r.tex, 0, 0, t.w, t.h, 4));
+    };
+    const p = s.params;
+    const final = await read(p, p.enable.dof && p.dof.strength > 0);
+    const before = await read(this.cameraParams(), false);
+    const items = checkPhoto({ final: { rgba: final, w: t.w, h: t.h }, before: { rgba: before, w: t.w, h: t.h }, seg: { ...s.scene.seg, groups: GROUPS } });
+    return { items, rgba: final, w: t.w, h: t.h };
   }
 
   async palette(): Promise<ColorStats> {
