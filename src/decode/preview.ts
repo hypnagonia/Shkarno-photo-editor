@@ -1,4 +1,5 @@
 import { srgbEotf as eotf, srgbOetf as oetf } from "../color/transfer.ts";
+import { jpegDC } from "./jpegDC.ts";
 /**
  * The camera's own rendering, embedded in a DNG: Apple ProRAW (and most camera
  * DNGs) carry a full-size JPEG preview of the photo as the phone showed it. Its
@@ -106,6 +107,55 @@ export interface PreviewStats {
  * Luminance quantiles of the embedded camera rendering, or undefined when the
  * file has none (or only a thumbnail: under 256 px on the long side).
  */
+/**
+ * The embedded camera rendering's pixels (RGBA, display-encoded Display P3) at `long`
+ * px on the long side, or undefined when the file has none (or only a thumbnail).
+ * For whole-photo figures (Check's "camera" colour and brightness): not aligned
+ * pixel for pixel with the development.
+ */
+export async function embeddedPreviewPixels(file: Blob, long = 256, maxMP = Infinity): Promise<{ rgba: Uint8Array; w: number; h: number } | undefined> {
+  if (typeof createImageBitmap !== "function" || typeof OffscreenCanvas === "undefined") return undefined;
+  let head: Uint8Array;
+  try { head = new Uint8Array(await file.slice(0, Math.min(file.size, (maxMP < Infinity ? 24 : 48) << 20)).arrayBuffer()); }
+  catch { return undefined; }
+  const best = findPreview(head);
+  if (!best) return undefined;
+  // A big preview (a 48 MP ProRAW's is 8064×6048): its DC coefficients alone give it at
+  // 1/8 size with ≈ 1 MB, where a browser decode would hold ≈ 200 MB on a phone.
+  if (Math.max(best.width, best.height) / 8 >= long) {
+    const dc = jpegDC(head.subarray(best.offset))
+      ?? jpegDC(new Uint8Array(await file.slice(best.offset, best.offset + Math.min(file.size - best.offset, 48 << 20)).arrayBuffer()));
+    if (dc) return boxDown(dc, long);
+  }
+  if ((best.width * best.height) / 1e6 > maxMP) return undefined;
+  try {
+    const s = long / Math.max(best.width, best.height);
+    const w = Math.max(1, Math.round(best.width * s)), h = Math.max(1, Math.round(best.height * s));
+    const bmp = await createImageBitmap(file.slice(best.offset, best.offset + Math.max(4 << 20, best.width * best.height * 2)), { resizeWidth: w, resizeHeight: h, resizeQuality: "medium" });
+    const c = new OffscreenCanvas(bmp.width, bmp.height);
+    const g = c.getContext("2d", { willReadFrequently: true })!;
+    g.drawImage(bmp, 0, 0);
+    bmp.close();
+    return { rgba: new Uint8Array(g.getImageData(0, 0, c.width, c.height).data.buffer), w: c.width, h: c.height };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Box-average down to `long` px on the long side. */
+function boxDown(img: { rgba: Uint8Array; w: number; h: number }, long: number): { rgba: Uint8Array; w: number; h: number } {
+  const k = Math.max(1, Math.floor(Math.max(img.w, img.h) / long));
+  const w = Math.floor(img.w / k), h = Math.floor(img.h / k);
+  const out = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const acc = [0, 0, 0];
+    for (let j = 0; j < k; j++) for (let i = 0; i < k; i++) { const o = ((y * k + j) * img.w + x * k + i) * 4; acc[0] += img.rgba[o]; acc[1] += img.rgba[o + 1]; acc[2] += img.rgba[o + 2]; }
+    const o = (y * w + x) * 4;
+    out[o] = acc[0] / (k * k); out[o + 1] = acc[1] / (k * k); out[o + 2] = acc[2] / (k * k); out[o + 3] = 255;
+  }
+  return { rgba: out, w, h };
+}
+
 export async function embeddedPreviewStats(file: Blob, qs: number[], maxMP = Infinity): Promise<PreviewStats | undefined> {
   if (typeof createImageBitmap !== "function" || typeof OffscreenCanvas === "undefined") return undefined;
   // Previews sit in the first part of the file (before the raw data in Apple's layout,

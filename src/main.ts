@@ -1159,8 +1159,13 @@ function checkText(it: CheckItem): string {
     v.dir = tOr(`check.dir.${it.v.dir}`, String(it.v.dir));
     const name = tOr(`check.scene.${it.v.scene}`, String(it.v.scene));
     v.scene = it.v.ev !== "" && it.v.ev !== undefined ? t("check.sceneEv", { name, ev: it.v.ev }) : name;
+    if (it.v.basis === "camera") return tOr(`check.exposure.cam.${it.level}`, "", v);
   }
   if (it.id === "contrast" && it.v.issue) return tOr(`check.contrast.${it.v.issue}`, "", v);
+  if (it.id === "saturation") {
+    v.cam = it.v.camera !== "" && it.v.camera !== undefined ? t("check.camRef", { v: it.v.camera }) : "";
+    return tOr(it.v.issue ? `check.saturation.${it.v.issue}.${it.level}` : "check.saturation.ok", "", v);
+  }
   return tOr(`check.${it.id}.${it.level}`, "", v);
 }
 /** The controls a fix names: label and how the value reads on its slider. */
@@ -1179,7 +1184,7 @@ function pctFix(v: number) { return `${v > 0 ? "+" : ""}${Math.round(v * 100)}`;
 function checkFixEl(it: CheckItem): HTMLElement {
   const box = el("div", { class: "check-fix" });
   if (!it.fix?.length || !params) {
-    box.textContent = checkSolving && it.err !== undefined ? t("check.solving") : t(`check.${it.id}.fix`);
+    box.textContent = checkSolving && it.err !== undefined ? t("check.solving") : it.id === "saturation" && it.v.issue === "pale" ? t("check.saturation.pale.fix") : t(`check.${it.id}.fix`);
     box.classList.toggle("solving", checkSolving && it.err !== undefined);
     return box;
   }

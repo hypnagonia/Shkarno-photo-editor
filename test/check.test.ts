@@ -73,3 +73,27 @@ test("exposure is judged for the scene: a dark photo is right at night, wrong in
   assert.notEqual(day.exposure.level, "ok", JSON.stringify(day.exposure.v));
   assert.equal(day.exposure.v.dir, "dark");
 });
+
+test("saturation: pale is colour the edit lost, loud is loud — never a ratio to a pale RAW development", () => {
+  const colourful = scene((x, y) => [x % 32 < 16 ? 60 : -40, y % 24 < 12 ? 40 : -30, x % 20 < 10 ? -50 : 50]);
+  const faded = scene((x, y) => [x % 32 < 16 ? 12 : -8, y % 24 < 12 ? 8 : -6, x % 20 < 10 ? -10 : 10]);
+  // Faded against the camera's colourful rendering: pale, even though our plain development was paler still.
+  const r = byId(checkPhoto({ final: faded, before: scene(), camera: colourful }));
+  assert.equal(r.saturation.v.issue, "pale", JSON.stringify(r.saturation.v));
+  // A grey scene that stays grey is not pale.
+  const g = byId(checkPhoto({ final: scene(), before: scene() }));
+  assert.equal(g.saturation.level, "ok", JSON.stringify(g.saturation.v));
+});
+
+test("with the camera's own rendering, exposure is judged against it", () => {
+  const dark = scene(() => [-45, -45, -45]);
+  const bright = scene();
+  // The camera itself rendered this scene dark: a dark edit matches it (even in daylight).
+  const same = byId(checkPhoto({ final: dark, before: dark, camera: dark, scene: { ev: 13 } }));
+  assert.equal(same.exposure.level, "ok", JSON.stringify(same.exposure.v));
+  assert.equal(same.exposure.v.basis, "camera");
+  // Much darker than the camera's rendering: says so, and which way.
+  const off = byId(checkPhoto({ final: dark, before: dark, camera: bright, scene: { ev: 13 } }));
+  assert.notEqual(off.exposure.level, "ok");
+  assert.equal(off.exposure.v.dir, "darker");
+});

@@ -34,11 +34,11 @@ export function leversFor(it: CheckItem, p: Params): Lever[] {
   const temp = getPath(p, "wb.temp") || 6504, tint = getPath(p, "wb.tint") || 0;
   let out: Lever[];
   switch (it.id) {
-    case "exposure": out = [L("exposure", it.v.dir === "bright" ? -3 : 3)]; break;
+    case "exposure": out = [L("exposure", it.v.dir === "bright" || it.v.dir === "brighter" ? -3 : 3)]; break;
     case "highlights": out = [L("exposure", -3), L("tone.whites", -1), L("tone.highlights", -1)]; break;
     case "shadows": out = [L("tone.blacks", 1), L("tone.shadows", 1), L("exposure", 3)]; break;
     case "colorClip": out = [L("color.saturation", -1), L("color.vibrance", -1)]; break;
-    case "saturation": out = Number(it.v.ratio) < 100 ? [L("color.saturation", 1), L("color.vibrance", 1)] : [L("color.saturation", -1), L("color.vibrance", -1)]; break;
+    case "saturation": out = it.v.issue === "pale" ? [L("color.vibrance", 1), L("color.saturation", 1)] : [L("color.saturation", -1), L("color.vibrance", -1)]; break;
     case "cast": {
       // Temperature for warm / blue casts, tint for green / magenta (Lightroom's sense: higher = warmer / more magenta).
       const t = String(it.v.tint);

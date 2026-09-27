@@ -22,6 +22,13 @@ export interface CheckInput {
   seg?: { width: number; height: number; probs: Float32Array; groups: readonly string[] };
   /** The scene's light level: EV at ISO 100 from the photo's exposure settings (absent when unknown). */
   scene?: { ev?: number };
+  /**
+   * The camera's own rendering (the JPEG inside a DNG), any size, not aligned with
+   * the renders: for whole-photo figures only (colourfulness, median, clipping share).
+   * `before` is our plain development, which for a RAW is much paler than what the
+   * phone shows — comparing colour against it made every edit look "twice as colourful".
+   */
+  camera?: CheckImage;
 }
 export type CheckLevel = "ok" | "warn" | "bad";
 export interface CheckItem {
@@ -143,6 +150,10 @@ export function checkPhoto(inp: CheckInput, only?: CheckId, beforePlanes?: Check
   const { w, h } = inp.final;
   const n = w * h;
   const F = toLab(inp.final), B = beforePlanes ?? toLab(inp.before);
+  const Cam = inp.camera ? toLab(inp.camera) : undefined;
+  const camN = inp.camera ? inp.camera.w * inp.camera.h : 0;
+  /** Share of the camera's own rendering meeting `f` (0 without one). */
+  const camShare = (f: (i: number) => boolean) => { if (!Cam) return 0; let k = 0; for (let i = 0; i < camN; i++) if (f(i)) k++; return k / camN; };
   const want = (id: CheckId) => !only || only === id;
   const items: CheckItem[] = [];
   const mask = () => new Uint8Array(n);
@@ -151,6 +162,8 @@ export function checkPhoto(inp: CheckInput, only?: CheckId, beforePlanes?: Check
   if (want("highlights")) {
     const m = mask(); let f = 0, b = 0;
     for (let i = 0; i < n; i++) { if (F.min[i] >= 250) { f++; if (B.min[i] < 250) m[i] = 1; } if (B.min[i] >= 250) b++; }
+    // What the camera itself clipped (its JPEG) counts as the scene's, not the edit's.
+    b = Math.max(b, camShare((i) => Cam!.min[i] >= 250) * n);
     const added = f / n - b / n;
     const level: CheckLevel = added > 0.01 ? "bad" : added > 0.003 || f / n > 0.03 ? "warn" : "ok";
     items.push({ id: "highlights", level, err: added - 0.001, v: { pct: pct(f / n), camera: pct(b / n), where: whereName(m, w, h, inp.seg) }, mask: level === "ok" ? undefined : (added > 0.003 ? m : Uint8Array.from(F.min, (v) => (v >= 250 ? 1 : 0))) });
@@ -159,6 +172,7 @@ export function checkPhoto(inp: CheckInput, only?: CheckId, beforePlanes?: Check
   if (want("shadows")) {
     const m = mask(); let f = 0, b = 0;
     for (let i = 0; i < n; i++) { if (F.max[i] <= 4) { f++; if (B.max[i] > 4) m[i] = 1; } if (B.max[i] <= 4) b++; }
+    b = Math.max(b, camShare((i) => Cam!.max[i] <= 4) * n);
     const added = f / n - b / n;
     const level: CheckLevel = added > 0.03 ? "bad" : added > 0.008 ? "warn" : "ok";
     items.push({ id: "shadows", level, err: added - 0.003, v: { pct: pct(f / n), camera: pct(b / n), where: whereName(m, w, h, inp.seg) }, mask: level === "ok" ? undefined : m });
@@ -177,14 +191,36 @@ export function checkPhoto(inp: CheckInput, only?: CheckId, beforePlanes?: Check
     const level: CheckLevel = added > 0.02 ? "bad" : added > 0.005 ? "warn" : "ok";
     items.push({ id: "colorClip", level, err: added - 0.002, v: { pct: pct(f / n), camera: pct(b / n), where: whereName(m, w, h, inp.seg) }, mask: level === "ok" ? undefined : m });
   }
-  // ---- saturation overall, versus the camera.
+  // ---- saturation: how colourful the photo is (mean OkLab chroma: photos sit around
+  //      0.03 muted … 0.10 vivid) and how much of it is very loud, judged on its own and
+  //      against the camera's own rendering where the file has one — never against our
+  //      plain RAW development, which is far paler than what the phone shows.
   if (want("saturation")) {
-    let cf = 0, cb = 0, loud = 0;
+    const stats = (P: Px, count: number) => {
+      let sum = 0, loud = 0;
+      for (let i = 0; i < count; i++) { sum += P.C[i]; if (P.C[i] > 0.22 && P.L[i] > 0.2 && P.L[i] < 0.95) loud++; }
+      return { mean: sum / count, loud: loud / count };
+    };
+    const f = stats(F, n), cam = Cam ? stats(Cam, camN) : undefined;
+    const ratio = cam && cam.mean > 1e-4 ? f.mean / cam.mean : undefined;
     const m = mask();
-    for (let i = 0; i < n; i++) { cf += F.C[i]; cb += B.C[i]; if (F.C[i] > 0.24 && F.C[i] > B.C[i] * 1.3) { loud++; m[i] = 1; } }
-    const ratio = cb > 1e-6 ? cf / cb : 1;
-    const level: CheckLevel = ratio > 1.6 || loud / n > 0.08 ? "bad" : ratio > 1.3 || loud / n > 0.03 ? "warn" : ratio < 0.6 ? "warn" : "ok";
-    items.push({ id: "saturation", level, err: ratio < 0.8 ? 0.75 - ratio : Math.max(ratio - 1.2, loud / n - 0.02), v: { ratio: Math.round(ratio * 100), loud: pct(loud / n) }, mask: level === "ok" ? undefined : m });
+    for (let i = 0; i < n; i++) if (F.C[i] > 0.22 && F.L[i] > 0.2 && F.L[i] < 0.95) m[i] = 1;
+    // Pale is colour the edit lost, not a grey scene (fog, concrete): less colourful than the
+    // camera's own rendering, or — without one — than even our plain development.
+    const base = cam ?? stats(B, n);
+    const lost = base.mean > 1e-4 ? f.mean / base.mean : 1;
+    const hadColour = base.mean >= 0.035;
+    const overdone = f.loud > 0.03 || f.mean > 0.12 || (ratio !== undefined && ratio > 1.3 && f.mean > 0.05);
+    // A fifth of the colour gone is already visible side by side with the camera's.
+    const pale = !overdone && (lost < 0.85 || (f.mean < 0.03 && hadColour));
+    const level: CheckLevel = overdone
+      ? (f.loud > 0.08 || f.mean > 0.15 || (ratio !== undefined && ratio > 1.6) ? "bad" : "warn")
+      : pale ? (lost < 0.6 || (f.mean < 0.018 && hadColour) ? "bad" : "warn") : "ok";
+    const err = overdone ? Math.max(f.loud - 0.02, f.mean - 0.11, ratio !== undefined ? ratio - 1.2 : -1)
+      : pale ? Math.max(hadColour ? 0.035 - f.mean : -1, 0.92 - lost) : -1;
+    items.push({ id: "saturation", level, err, v: {
+      issue: overdone ? "loud" : pale ? "pale" : "", colour: Math.round(f.mean * 1000) / 10, camera: cam ? Math.round(cam.mean * 1000) / 10 : "", loud: pct(f.loud),
+    }, mask: overdone ? m : undefined });
   }
   // ---- skin: people's skin (people region, skin-like in the camera's rendering) in the final.
   if (want("skin") && inp.seg?.groups.includes("person")) {
@@ -226,19 +262,30 @@ export function checkPhoto(inp: CheckInput, only?: CheckId, beforePlanes?: Check
   //      snow bright), not against a fixed middle: the scene's light level (EV from the
   //      photo's exposure settings) and the camera's own rendering decide the scene.
   if (want("exposure")) {
-    const med = quantile(F.L, 0.5), cam = quantile(B.L, 0.5);
+    const med = quantile(F.L, 0.5), cam = Cam ? quantile(Cam.L, 0.5, 3) : quantile(B.L, 0.5);
     let sky = 0;
     if (inp.seg) { const g = inp.seg.groups.indexOf("sky"), pl = inp.seg.width * inp.seg.height; if (g >= 0) { for (let i = 0; i < pl; i++) sky += inp.seg.probs[g * pl + i]; sky /= pl; } }
     const kind = sceneKind(inp.scene?.ev, cam, sky);
     const [lo, hi] = SCENE_BAND[kind];
-    const dist = med < lo ? lo - med : med > hi ? med - hi : 0;
-    const level: CheckLevel = dist === 0 ? "ok" : dist <= 0.06 ? "warn" : "bad";
-    // Into the scene's range, a little inside it (not the edge), from whichever side.
-    const err = med < lo ? lo + 0.03 - med : med > hi ? med - (hi - 0.03) : -1;
-    items.push({ id: "exposure", level, err, v: {
-      scene: kind, ev: inp.scene?.ev !== undefined ? Math.round(inp.scene.ev * 10) / 10 : "", median: Math.round(med * 100),
-      lo: Math.round(lo * 100), hi: Math.round(hi * 100), camera: Math.round(cam * 100), dir: med < lo ? "dark" : "bright",
-    } });
+    const ev = inp.scene?.ev !== undefined ? Math.round(inp.scene.ev * 10) / 10 : "";
+    if (Cam) {
+      // The camera's own rendering is the better judge where the file has one: it already
+      // holds the camera's metering for exactly this scene (a deep-blue sky rendered dark
+      // on purpose, a dim room lifted). Within 6 points fine, 12 worth a look.
+      const d = med - cam;
+      const level: CheckLevel = Math.abs(d) <= 0.06 ? "ok" : Math.abs(d) <= 0.12 ? "warn" : "bad";
+      items.push({ id: "exposure", level, err: Math.abs(d) - 0.03, v: {
+        basis: "camera", scene: kind, ev, median: Math.round(med * 100), camera: Math.round(cam * 100), dir: d < 0 ? "darker" : "brighter",
+      } });
+    } else {
+      const dist = med < lo ? lo - med : med > hi ? med - hi : 0;
+      const level: CheckLevel = dist === 0 ? "ok" : dist <= 0.06 ? "warn" : "bad";
+      // Into the scene's range, a little inside it (not the edge), from whichever side.
+      const err = med < lo ? lo + 0.03 - med : med > hi ? med - (hi - 0.03) : -1;
+      items.push({ id: "exposure", level, err, v: {
+        basis: "scene", scene: kind, ev, median: Math.round(med * 100), lo: Math.round(lo * 100), hi: Math.round(hi * 100), camera: Math.round(cam * 100), dir: med < lo ? "dark" : "bright",
+      } });
+    }
   }
   // ---- contrast: tonal range, and whether there are real blacks and whites.
   if (want("contrast")) {

@@ -31,7 +31,7 @@ import type { AnalysisReport } from "../analysis/types.ts";
 import { decide, type DecisionResult } from "../decision/engine.ts";
 import { autoFocus, objectDepthRange } from "../decision/focus.ts";
 import { buildAutoLayers } from "../layers/auto.ts";
-import { embeddedPreviewStats, MEDIAN, REF_QS, renderedQuantiles, shadowMatch } from "../decode/preview.ts";
+import { embeddedPreviewPixels, embeddedPreviewStats, MEDIAN, REF_QS, renderedQuantiles, shadowMatch } from "../decode/preview.ts";
 import { displayQuantiles } from "../decision/autoCurves.ts";
 import { allMask, makeLayer } from "../layers/model.ts";
 import { depthZones } from "../decision/zones.ts";
@@ -79,6 +79,10 @@ type Post = (m: FromWorker, transfer?: Transferable[]) => void;
 
 interface Session {
   name: string;
+  /** The opened file (a reference, not a copy): Check reads the camera's own rendering from it. */
+  file: File;
+  /** The camera's own rendering (the JPEG inside a DNG) at 256 px, read on the first check; null = none. */
+  cameraRef?: { rgba: Uint8Array; w: number; h: number } | null;
   decoded: DecodedImage;
   work: WorkingImage;
   denoised: GPUTexture; // === work.tex until neural restoration ran
@@ -486,7 +490,7 @@ export class Engine {
     // Atmospheric light: dark-channel estimate is in the analysis encoding → linear working.
     const A = decision.params.dehaze.light.map((v) => srgbEotf(v) / gain) as [number, number, number];
 
-    const s: Session = { name: file.name, decoded, work, denoised: work.tex, gain, scene, maps, report, decision, params, lightLinear: A, scale: 1, skin: skinTex };
+    const s: Session = { name: file.name, file, decoded, work, denoised: work.tex, gain, scene, maps, report, decision, params, lightLinear: A, scale: 1, skin: skinTex };
     if (reference && autoExposure) s.calib = { ref: reference.q, rounds: 0, black: false };
     this.s = s;
     commit(); // from here closeSession() frees it
@@ -1370,19 +1374,24 @@ export class Engine {
     const before = await read(this.cameraParams(), false);
     const seg = { ...s.scene.seg, groups: GROUPS };
     const [{ checkPhoto }] = await checkCode();
-    const items = checkPhoto({ final: { rgba: final, w: t.w, h: t.h }, before: { rgba: before, w: t.w, h: t.h }, seg, scene: { ev: sceneEV(s.decoded.meta) } });
+    // The camera's own rendering (Apple's JPEG inside a ProRAW DNG): what "camera" means for
+    // the whole-photo figures. Our plain development of the RAW is far paler than what the
+    // phone shows, and would make any edit look "twice as colourful".
+    if (s.cameraRef === undefined) s.cameraRef = /\.dng$/i.test(s.name) ? (await embeddedPreviewPixels(s.file, 256, isMobile() ? 24 : Infinity)) ?? null : null;
+    const camera = s.cameraRef ?? undefined;
+    const items = checkPhoto({ final: { rgba: final, w: t.w, h: t.h }, before: { rgba: before, w: t.w, h: t.h }, camera, seg, scene: { ev: sceneEV(s.decoded.meta) } });
     // The fixes are worked out next, as their own job (solveCheckFixes): the findings show at once.
-    this.lastCheck = { s, items: items.map((i) => ({ ...i, mask: undefined })), seg, scene: { ev: sceneEV(s.decoded.meta) } };
+    this.lastCheck = { s, items: items.map((i) => ({ ...i, mask: undefined })), seg, scene: { ev: sceneEV(s.decoded.meta) }, camera };
     return { items, rgba: final, w: t.w, h: t.h };
   }
-  private lastCheck?: { s: Session; items: CheckItem[]; seg: NonNullable<CheckInput["seg"]>; scene: CheckInput["scene"] };
+  private lastCheck?: { s: Session; items: CheckItem[]; seg: NonNullable<CheckInput["seg"]>; scene: CheckInput["scene"]; camera?: CheckInput["camera"] };
 
   /** The fixes for the last check's findings, each reported as soon as it is worked out. */
   async solveCheckFixes(onFix: (id: CheckItem["id"], fix: FixChange[], partial: boolean) => void) {
     const c = this.lastCheck;
     this.lastCheck = undefined;
     if (!c || c.s !== this.s) return; // another photo since
-    await this.solveFixes(c.s, c.items, c.seg, c.scene, (it) => onFix(it.id, it.fix!, !!it.fixPartial));
+    await this.solveFixes(c.s, c.items, c.seg, c.scene, c.camera, (it) => onFix(it.id, it.fix!, !!it.fixPartial));
   }
 
   /**
@@ -1393,7 +1402,7 @@ export class Engine {
    * edge of "fine". If no control gets there, the layer whose opacity does; failing
    * that, the control that helps most (a partial fix).
    */
-  private async solveFixes(s: Session, items: CheckItem[], seg: NonNullable<CheckInput["seg"]>, scene: CheckInput["scene"], onFix: (it: CheckItem) => void) {
+  private async solveFixes(s: Session, items: CheckItem[], seg: NonNullable<CheckInput["seg"]>, scene: CheckInput["scene"], camera: CheckInput["camera"], onFix: (it: CheckItem) => void) {
     const todo = items.filter((i) => i.level !== "ok" && i.err !== undefined);
     if (!todo.length) return;
     const [{ checkPhoto, planesOf }, { getPath, leversFor, setPath, stepOf }] = await checkCode();
@@ -1409,7 +1418,7 @@ export class Engine {
     const beforeImg = await render(this.cameraParams());
     const beforePlanes = planesOf(beforeImg);
     const errWith = async (id: CheckItem["id"], p: Params) =>
-      checkPhoto({ final: await render(p), before: beforeImg, seg, scene }, id, beforePlanes).find((i) => i.id === id)?.err ?? -1;
+      checkPhoto({ final: await render(p), before: beforeImg, seg, scene, camera }, id, beforePlanes).find((i) => i.id === id)?.err ?? -1;
     const base = s.params;
     for (const it of todo) {
       const e0 = await errWith(it.id, base);
