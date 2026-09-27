@@ -123,6 +123,8 @@ export interface Params {
   depthBands: [number, number];
   /** The creative layer: one look profile on top of the technical base. */
   profile: LookProfile;
+  /** The camera look applied (src/looks/cameras.ts) and which of its parts; absent = none. */
+  camera?: { id: string; colour: boolean; lens: boolean; sensor: boolean };
   denoise: { luma: number; chroma: number; shadowBoost: number };
   sharpen: { amount: number; radius: number; threshold: number };
   dehaze: { strength: number; light: [number, number, number]; beta: number; minT: number };

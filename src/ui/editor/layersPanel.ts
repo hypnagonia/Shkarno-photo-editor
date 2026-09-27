@@ -38,6 +38,8 @@ type Ctx = {
   develop: HTMLElement;
   /** The Blur properties (depth of field: focus, strength, zones, depth views). */
   blur: HTMLElement;
+  /** The Camera properties (camera looks: colour, lens, sensor). */
+  camera: HTMLElement;
   /** Something other than Blur became selected: its photo tools (focus picking, zone views) end. */
   leftBlur?: () => void;
   /** Taps on the photo pick what to mask (on, with a hint for the photo) or do what they normally do (off). */
@@ -50,7 +52,7 @@ type Ctx = {
 
 /** Layer types in the ＋ sheet (each type's icon has the type's name). */
 /** The cards that are not layers: always there, at the bottom of the stack. */
-type Fixed = "develop" | "blur";
+type Fixed = "develop" | "blur" | "camera";
 
 const ADD: LayerType[] = ["curves", "hueSat", "basic", "blur", "gradientMap", "gradientFill", "brightContrast", "exposure"];
 
@@ -146,7 +148,7 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
   }
 
   function renderDock() {
-    list.replaceChildren(...[...layers()].reverse().map((l) => card(l)), card(undefined, "develop"), card(undefined, "blur"));
+    list.replaceChildren(...[...layers()].reverse().map((l) => card(l)), card(undefined, "develop"), card(undefined, "blur"), card(undefined, "camera"));
     list.querySelector(".lay-card.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
@@ -562,8 +564,9 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     curvesUi = undefined;
     const l = sel();
     if (!l) {
-      if (selected !== "blur") { selected = "develop"; ctx.leftBlur?.(); }
-      props.replaceChildren(selected === "blur" ? ctx.blur : ctx.develop);
+      if (selected !== "blur" && selected !== "camera") selected = "develop";
+      if (selected !== "blur") ctx.leftBlur?.();
+      props.replaceChildren(selected === "blur" ? ctx.blur : selected === "camera" ? ctx.camera : ctx.develop);
       applyMaskView();
       return;
     }
