@@ -22,6 +22,7 @@ import { t, tOr } from "../i18n.ts";
 import { icon } from "./icons.ts";
 import { createGradientEditor } from "./gradientEditor.ts";
 import { defaultShape, liveLayers } from "../../layers/gpu.ts";
+import { flareLayers, moveFlare } from "../../layers/flare.ts";
 import { el } from "../dom.ts";
 
 type Ctx = {
@@ -44,6 +45,8 @@ type Ctx = {
   pickMode: (on: boolean, hint?: string) => void;
   /** A short message on the photo. */
   notice?: (text: string) => void;
+  /** Where the light probably is in the photo (a lens flare's default position). */
+  brightest?: () => Promise<{ x: number; y: number }>;
   /** The photo's main colours (hex), for "From photo" in gradients. */
   photoColors?: () => Promise<string[]>;
 };
@@ -166,7 +169,24 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
       render();
     };
     return b;
-  })));
+  }), (() => {
+    // Lens flare: six ordinary layers (src/layers/flare.ts) at the photo's brightest spot,
+    // then a tap on the light places it exactly.
+    const b = el("button", { class: "lay-addbtn" }, el("span", { class: "g" }, icon("flare", 19)), el("span", { text: t("flare.add") }));
+    b.onclick = async () => {
+      const p = ctx.params(); if (!p) return;
+      addSheet.hidden = true;
+      const L = (await ctx.brightest?.().catch(() => undefined)) ?? { x: 0.3, y: 0.2 };
+      const ls = flareLayers(L, { veil: t("flare.veil"), glow: t("flare.glow"), streak: t("flare.streak"), ghost: t("flare.ghost") });
+      const at = p.layers.findIndex((x) => x.id === selected);
+      p.layers.splice(at + 1, 0, ...ls);
+      selected = ls[1].id; tab = "adjust";
+      ctx.changed(t("flare.add"));
+      render();
+      setPlacing(ls[0].flare!.set);
+    };
+    return b;
+  })()));
   dock.append(addSheet);
   // A tap anywhere else closes the ＋ sheet.
   document.addEventListener("pointerdown", (e) => {
@@ -334,9 +354,26 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
   /** The piece whose settings are open ("main" or a part's index). */
   let open: "main" | number | undefined;
   function setPicking(on: boolean) {
-    if (on === picking) return;
+    if (placing || on === picking) return;
     picking = on;
     ctx.pickMode(on, t("mask.tapHint"));
+  }
+  /** A lens flare waiting for a tap on its light (its set), or none. */
+  let placing: string | undefined;
+  function setPlacing(set: string | undefined) {
+    placing = set;
+    picking = !!set;
+    ctx.pickMode(!!set, t("flare.tapLight"));
+    if (!set) applyMaskView();
+  }
+  function placeAt(x: number, y: number): boolean {
+    const p = ctx.params();
+    if (!placing || !p) return false;
+    moveFlare(p.layers, placing, { x, y });
+    setPlacing(undefined);
+    ctx.changed(t("flare.moved"));
+    render();
+    return true;
   }
   function shapeFromPick(info: PickInfo, as: typeof pickAs): Partial<MaskShape> {
     if (as === "color") return { kind: "color", color: info.color, tol: 0.08 };
@@ -623,7 +660,20 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
       return b;
     }));
     const body = tab === "adjust" ? adjustBody(l) : tab === "mask" ? maskBody(l) : blendBody(l);
-    props.replaceChildren(head, segs, ...body);
+    const flareRow: HTMLElement[] = [];
+    if (l.flare) {
+      const set = l.flare.set;
+      const move = el("button", { class: "btn small" + (placing === set ? " primary" : ""), text: placing === set ? t("flare.tapLight") : t("flare.move") });
+      move.onclick = () => { setPlacing(placing === set ? undefined : set); renderProps(); };
+      const del = el("button", { class: "btn small", text: t("flare.remove") });
+      del.onclick = () => {
+        p.layers = p.layers.filter((x) => x.flare?.set !== set);
+        if (placing === set) setPlacing(undefined);
+        selected = "develop"; ctx.changed(t("flare.remove")); render();
+      };
+      flareRow.push(el("div", { class: "actions flare-row" }, move, del));
+    }
+    props.replaceChildren(head, ...flareRow, segs, ...body);
     applyMaskView();
   }
 
@@ -636,6 +686,8 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     /** The panel became visible / hidden (mask view only while it is shown). */
     setVisible(v: boolean) { visible = v; applyMaskView(); },
     selectDevelop() { selected = "develop"; render(); },
+    /** A tap on the photo while a lens flare waits for its light: taken (true), or not a placing tap. */
+    placeAt(x: number, y: number): boolean { return placeAt(x, y); },
     /** The engine's answer to a tap in pick mode. */
     onPick(info: PickInfo): boolean { return onPick(info); },
     /** What a tap on the photo edits now: the selected layer (index among the live layers) and whether taps select objects. */

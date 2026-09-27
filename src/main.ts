@@ -172,6 +172,8 @@ let maskPicking = false;
 let pickBusy = false, lastPickAt = 0, pickTimer = 0, pickAwaitsPreview = false;
 let pickMark: HTMLElement | undefined;
 function maskTap(x: number, y: number, cx: number, cy: number) {
+  // A lens flare waiting for its light takes the tap itself (no engine round trip).
+  if (layersPanel.placeAt(x, y)) return;
   const now = performance.now();
   if (pickBusy || now - lastPickAt < 400) return;
   const target = layersPanel.pickTarget();
@@ -946,6 +948,11 @@ const layersPanel = createLayersPanel(dockEl, propsEl, {
     send({ type: "palette" });
   }),
   notice: (text) => { badge.textContent = text; badge.classList.add("on"); },
+  brightest: () => new Promise((resolve) => {
+    const f = (m: FromWorker) => { if (m.type === "brightest") { engineListeners.delete(f); resolve({ x: m.x, y: m.y }); } };
+    engineListeners.add(f);
+    send({ type: "brightest" });
+  }),
   pickMode: (on, hint) => {
     maskPicking = on;
     if (!on) { pickMark?.remove(); pickMark = undefined; }

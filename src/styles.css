@@ -481,3 +481,4 @@ header.top .push { margin-left: auto; }
   background: #d9a400; color: #000; font-weight: bold; pointer-events: none; }
 .check-badge.bad { background: var(--danger); color: #fff; }
 .check-fix.solving { color: var(--muted); font-style: italic; }
+.flare-row { margin: 0 0 10px; }

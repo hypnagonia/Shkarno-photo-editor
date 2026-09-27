@@ -14,6 +14,7 @@ export const ICON = {
   reset: "M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5",
   // Layer types
   develop: "M4 7h9m4 0h3M4 17h3m4 0h9M15 5v4M9 15v4",
+  flare: "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM2 12h5M17 12h5M12 3v3M12 18v3M19.5 19.5l-1.5-1.5",
   blur: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v2M12 19v2M3 12h2M19 12h2",
   curves: "M4 20C11 20 10 4 20 4M4 4v16h16",
   hueSat: "M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z",

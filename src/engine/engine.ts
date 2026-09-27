@@ -1468,6 +1468,28 @@ export class Engine {
     this.log(`check fixes: ${todo.length} findings, ${renders} renders at ${t.w}×${t.h}, ${Math.round(performance.now() - t0)} ms`);
   }
 
+  /**
+   * Where the light probably is (a lens flare's default): the brightest spot in the
+   * upper 60 % of the photo as edited, on a 256 px render, smoothed so a single
+   * glint does not win over the sun.
+   */
+  async brightestPoint(): Promise<{ x: number; y: number }> {
+    const s = this.s;
+    if (!s) return { x: 0.3, y: 0.2 };
+    const t = await this.ensureThumb(256);
+    const p = s.params;
+    const r = await this.renderer.render({ base: t.base, denoised: t.denoised, width: t.w, height: t.h, fullWidth: s.work.width }, s.maps, p, { wb: this.wbFor(p), gain: s.gain, lightLinear: s.lightLinear, output: "p38", dither: false }, false);
+    const px = new Uint8Array(await this.gpu.readTexture(r.tex, 0, 0, t.w, t.h, 4));
+    const { w, h } = t, R = 4;
+    let best = -1, bx = 0.3, by = 0.2;
+    for (let y = R; y < Math.floor(h * 0.6); y += 2) for (let x = R; x < w - R; x += 2) {
+      let sum = 0;
+      for (let j = -R; j <= R; j += 2) for (let i = -R; i <= R; i += 2) { const o = ((y + j) * w + x + i) * 4; sum += Math.max(px[o], px[o + 1], px[o + 2]); }
+      if (sum > best) { best = sum; bx = x / (w - 1); by = y / (h - 1); }
+    }
+    return { x: Math.round(bx * 1000) / 1000, y: Math.round(by * 1000) / 1000 };
+  }
+
   async palette(): Promise<ColorStats> {
     const s = this.s;
     if (!s) throw new Error("No photo open");

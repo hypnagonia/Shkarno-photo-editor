@@ -104,6 +104,9 @@ async function handle(m: ToWorker) {
       post({ type: "pick", info });
       break;
     }
+    case "brightest":
+      post({ type: "brightest", ...(await engine.brightestPoint()) });
+      break;
     case "mem":
       post({ type: "mem", ...engine.memStats() });
       break;
