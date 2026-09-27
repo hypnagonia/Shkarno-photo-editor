@@ -221,9 +221,13 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
   const sampler = gpu.device.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" });
   const tw = Math.ceil(W / TILE), th = Math.ceil(H / TILE);
   const scanK = W / rw;
+  // The weight a pixel gathers where every frame agrees (the shader's per-frame weight, summed):
+  // the ghost mix compares what a pixel got against this, not against the frame count.
+  const frameWeight = (a: Aligned) => Math.min(4, Math.max(0.25, 1 / (a.g * a.g))) * (a.lens?.weight ?? 1) * a.sharpWeight;
+  const fullWeight = 1 + aligned.reduce((t, a) => t + frameWeight(a), 0);
   const uni = (g: number, mode = 0, a?: Aligned) => {
     const L = a?.lens;
-    return new Uniforms(28).u32(W, H, tw, th).f32(g, scanK / 3, aligned.length + 1).u32(mode).f32(...sig)
+    return new Uniforms(28).u32(W, H, tw, th).f32(g, scanK / 3, fullWeight).u32(mode).f32(...sig)
       .f32(L?.aff.a ?? 1, L?.aff.b ?? 0, L?.aff.tx ?? 0, L?.aff.ty ?? 0).f32(a?.scan.W ?? W, a?.scan.H ?? H, 0, 0)
       .f32(...(L?.gc ?? [1, 1, 1]), (L?.weight ?? 1) * (a?.sharpWeight ?? 1)).bytes();
   };
@@ -286,30 +290,39 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
           gpu.dispatch(enc, pipe("luma"), [u, fv, frmL.createView()], Math.ceil(W / 16), Math.ceil(H / 16));
           gpu.dispatch(enc, pipe("align"), [u, undefined, undefined, refL.createView(), frmL.createView(), initBuf, flowBuf], tw, th);
           gpu.dispatch(enc, pipe("weights"), [u, fv, undefined, undefined, undefined, undefined, flowBuf, sampler, acc, wbuf], Math.ceil(W / 16), Math.ceil(H / 8));
-          gpu.dispatch(enc, pipe("accumulate"), [u, fv, undefined, undefined, undefined, undefined, flowBuf, sampler, acc, wbuf], Math.ceil(W / 8), Math.ceil(H / 8));
+          gpu.dispatch(enc, pipe("accumulate"), [u, fv, undefined, undefined, undefined, undefined, flowBuf, undefined, acc, wbuf], Math.ceil(W / 8), Math.ceil(H / 8)); // (bicubic by texel loads: no sampler)
         }, true);
       } finally { gpu.release(F.work.tex, frame); }
       if (opt.cancelled()) throw new Error("cancelled");
     }
     gpu.release(wbuf, flowBuf, initBuf, refL, frmL);
 
-    // Finalize: the mean, then ghost areas (few frames agreed) mixed toward a denoised version.
+    // Finalize: the mean, then ghost areas (few frames agreed) mixed toward a denoised
+    // version and softened fine texture taken from the reference (developed again: it was
+    // not kept through the merge, the phone's memory peak).
     opt.progress("series finish", undefined, 0.97);
     out = gpu.tex("working", W, H, "rgba16float");
     const dummy = gpu.tex("burst.dummy", 1, 1, "rgba16float");
     await gpu.run("burst.finalize", (enc, temp) => {
       const u = gpu.uniform(uni(1, 0)); temp.push(u);
-      gpu.dispatch(enc, pipe("finalize"), [u, undefined, undefined, undefined, undefined, undefined, undefined, undefined, acc, undefined, dummy.createView(), out!.createView()], Math.ceil(W / 8), Math.ceil(H / 8));
+      gpu.dispatch(enc, pipe("finalize"), [u, dummy.createView(), undefined, undefined, undefined, undefined, undefined, undefined, acc, undefined, dummy.createView(), out!.createView()], Math.ceil(W / 8), Math.ceil(H / 8));
     }, true);
     gpu.release(dummy);
     if (aligned.length >= 1) {
       const dn = await denoiseGPU(gpu, out, W, H, gain, noise);
+      let refTex: GPUTexture | undefined;
       try {
+        const R2 = await decodeDev(gpu, ref.file, factor);
+        R2.decoded.close();
+        refTex = R2.work.tex;
+        // Encoded-luma noise per bin of one full-size frame (the detail test), and the display gain.
+        const encSig = noise.bins.map((b) => (b.blocks >= 4 && Number.isFinite(b.sigma) ? b.sigma : noise.mid));
+        const u8 = new Uniforms(28).u32(W, H, tw, th).f32(gain, scanK / 3, fullWeight).u32(1).f32(...encSig).f32(1, 0, 0, 0).f32(W, H, 0, 0).f32(1, 1, 1, 1).bytes();
         await gpu.run("burst.ghosts", (enc, temp) => {
-          const u = gpu.uniform(uni(1, 1)); temp.push(u);
-          gpu.dispatch(enc, pipe("finalize"), [u, undefined, undefined, undefined, undefined, undefined, undefined, undefined, acc, undefined, dn.createView(), out!.createView()], Math.ceil(W / 8), Math.ceil(H / 8));
+          const u = gpu.uniform(u8); temp.push(u);
+          gpu.dispatch(enc, pipe("finalize"), [u, refTex!.createView(), undefined, undefined, undefined, undefined, undefined, undefined, acc, undefined, dn.createView(), out!.createView()], Math.ceil(W / 8), Math.ceil(H / 8));
         }, true);
-      } finally { gpu.release(dn); }
+      } finally { gpu.release(dn, refTex); }
     }
     gpu.release(acc);
     const used = aligned.length + 1;

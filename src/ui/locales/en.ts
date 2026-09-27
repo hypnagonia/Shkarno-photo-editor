@@ -566,6 +566,8 @@ export const en = {
   "adj.depth": "Depth",
   "adj.nearDetail": "Near detail",
   "adj.farDetail": "Far detail",
+  "adj.zero": "Zero all",
+  "adj.zeroTip": "Every Develop control to its neutral value (the photo as developed, camera white balance, no automatic grade). The look and your layers stay.",
   "adj.reset": "Reset all to automatic",
   "adj.curves": "Curves (this photo)",
   "adj.curvesHint": "Tap the curve to add a point, drag to move it, drag a point out of the box to remove it. Behind the curve: how the photo's tones are spread (left = black, right = white). The look has its own curves (Look → Edit look).",

@@ -40,6 +40,8 @@ export async function runAutotest(app: AutotestApp) {
     if (m.type === "progress") void report(`progress:${m.stage}`, { detail: m.detail });
     if (m.type === "error") void report("error", { message: m.message });
     if (m.type === "log" && /^series/.test(m.text)) void report("log", { text: m.text });
+    // A GPU validation error drops that dispatch silently (the result is just wrong): fail the run.
+    if (m.type === "log" && /^GPU error/.test(m.text)) void report("gpuerror", { message: m.text });
   });
   const waitFor = (pred: (m: FromWorker) => boolean, what: string, ms = 240_000) => new Promise<FromWorker>((resolve, reject) => {
     const timer = setTimeout(() => { off(); reject(new Error(`timeout waiting for ${what}`)); }, ms);

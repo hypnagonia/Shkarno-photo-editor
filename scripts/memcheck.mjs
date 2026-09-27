@@ -130,6 +130,8 @@ for (const photo of photos) {
         }
         if (r.stage === "done" || r.stage === "failed") { done = done || r.stage; message = message || (r.message ?? ""); }
         if (r.stage === "error") message = r.message;
+        // A GPU validation error: a dispatch was dropped and its result is wrong, whatever the memory says.
+        if (r.stage === "gpuerror") { done = "failed"; message = r.message; }
       }
       seen = lines.length;
     }

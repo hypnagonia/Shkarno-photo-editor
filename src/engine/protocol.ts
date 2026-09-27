@@ -91,7 +91,7 @@ export type FromWorker =
   | { type: "preview"; width: number; height: number; data?: ArrayBuffer; space: "p3" | "srgb"; final: boolean; ms: number }
   /** Whether the handed-over canvas could be set up for GPU display (else the page draws previews itself). */
   | { type: "display"; ok: boolean; message?: string }
-  | { type: "analysis"; summary: Summary; decisions: Decision[]; auto: Params; params: Params; dof: { justified: boolean; focus: number; strength: number; reason: string; x?: number; y?: number; zoneEdges?: number[]; zones?: Array<{ share: number; label: string; lo: number; hi: number }>; bands?: Array<{ share: number; label: string; lo: number; hi: number }> }; exposureSuggestion: number; autoCurves?: AutoCurveBands; cellCoverage?: Record<string, number>; /** Why this photo has no depth map (it opened without one), if so. */ noDepth?: string }
+  | { type: "analysis"; summary: Summary; decisions: Decision[]; auto: Params; params: Params; dof: { justified: boolean; focus: number; strength: number; reason: string; x?: number; y?: number; zoneEdges?: number[]; zones?: Array<{ share: number; label: string; lo: number; hi: number }>; bands?: Array<{ share: number; label: string; lo: number; hi: number }> }; exposureSuggestion: number; autoCurves?: AutoCurveBands; cellCoverage?: Record<string, number>; /** Why this photo has no depth map (it opened without one), if so. */ noDepth?: string; /** The camera's own white balance (the neutral one). */ cameraWB?: { temp: number; tint: number } }
   | { type: "params"; params: Params }
   /** Automatic exposure corrected after measuring the first preview against the camera's rendering. */
   | { type: "exposureCalibrated"; exposure: number; note: string }

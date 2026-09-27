@@ -11,7 +11,9 @@
 //               the mean beyond noise — something moved — or is clipped)
 //   accumulate  mean += w·(frame − mean) / (W + w)
 //   finalize    accumulator → working texture; where few frames agreed (moving
-//               things), mixed toward a denoised version so they are not noisier
+//               things), mixed toward a denoised version so they are not noisier;
+//               where fine texture was softened (not alignable to a fraction of a
+//               pixel), the reference's own pixel kept
 //
 // Accumulator: per pixel two u32 = (r, g) and (b, W) as half floats. W < 0 marks
 // a pixel still clipped in every frame so far.
@@ -20,7 +22,7 @@ struct U {
   w: u32, h: u32, tw: u32, th: u32,
   g: f32,        // this frame's exposure ratio to the reference
   sscale: f32,   // scan σ → σ of a 3×3 mean at full resolution
-  n: f32,        // frames in the series
+  n: f32,        // the weight a pixel gets where every frame agrees (1 = the reference alone)
   mode: u32,     // finalize: 1 = mix the denoised image into ghost areas
   sig0: vec4<f32>, sig1: vec4<f32>, // noise σ (linear) per √Y bin, 8 bins
   aff: vec4<f32>,  // another lens: reference → frame pixels, q − c_f = [a −b; b a](p − c_r) + t
@@ -241,16 +243,46 @@ fn init(@builtin(global_invocation_id) id: vec3<u32>) {
   acc[id.y * u.w + id.x] = vec2<u32>(pack2x16float(c.rg), pack2x16float(vec2<f32>(c.b, select(1.0, -1.0, c.a > 0.0))));
 }
 
+/** Noise σ (display-encoded luma, one full-size pixel) at encoded luma e: u.sig bins over 0…1 (finalize mode 1). */
+fn sigma_enc(e: f32) -> f32 {
+  let b = clamp(e * 8.0 - 0.5, 0.0, 7.0);
+  let i = u32(floor(b)); let f = b - f32(i);
+  let s = array<f32, 8>(u.sig0.x, u.sig0.y, u.sig0.z, u.sig0.w, u.sig1.x, u.sig1.y, u.sig1.z, u.sig1.w);
+  return mix(s[i], s[min(7u, i + 1u)], f);
+}
+fn enc_y(c: vec3<f32>) -> f32 { return srgb_oetf1(clamp(u.g * luma2020(c), 0.0, 1.0)); }
+
 @compute @workgroup_size(8, 8)
 fn finalize(@builtin(global_invocation_id) id: vec3<u32>) {
   if (id.x >= u.w || id.y >= u.h) { return; }
-  let m = acc_get(i32(id.x), i32(id.y));
+  let p = vec2<i32>(id.xy);
+  let m = acc_get(p.x, p.y);
   var c = m.rgb;
   if (u.mode == 1u) {
-    // Ghost areas (few frames agreed): toward the denoised image, as much as frames are missing.
-    let want = min(u.n, 4.0);
-    let a = clamp((want - abs(m.w)) / max(want - 1.0, 1e-3), 0.0, 1.0);
-    c = mix(c, textureLoad(dn, vec2<i32>(id.xy), 0).rgb, a);
+    // Ghost areas (few frames agreed: something moved): toward the denoised image, as much
+    // as the pixel's weight falls short of half of what full agreement gives. Where most
+    // frames agreed, the merge itself is the noise reduction — no denoiser blur there.
+    let want = max(0.5 * u.n, 1.0 + 1e-3);
+    let a = clamp((want - abs(m.w)) / (want - 1.0), 0.0, 1.0);
+    c = mix(c, textureLoad(dn, p, 0).rgb, a);
+    // Detail rescue: fine texture that hand-held frames could not align to a fraction of a
+    // pixel is softened by the mean. Where the merge's fine detail (pixel − 3×3 mean)
+    // differs from the reference's by more than noise explains, the reference is kept.
+    let mx = vec2<i32>(i32(u.w) - 1, i32(u.h) - 1);
+    var rb = 0.0; var mb = 0.0;
+    for (var j = -1; j <= 1; j++) {
+      for (var i = -1; i <= 1; i++) {
+        let q = clamp(p + vec2<i32>(i, j), vec2<i32>(0), mx);
+        rb += enc_y(textureLoad(frame, q, 0).rgb);
+        mb += enc_y(acc_get(q.x, q.y).rgb);
+      }
+    }
+    let rc = textureLoad(frame, p, 0).rgb;
+    let er = enc_y(rc);
+    let d = abs((er - rb / 9.0) - (enc_y(m.rgb) - mb / 9.0));
+    let s = max(sigma_enc(er), 1e-4);
+    let keep = smoothstep(1.0 * s, 2.5 * s, d);
+    c = mix(c, rc, keep);
   }
-  textureStore(out, vec2<i32>(id.xy), vec4<f32>(c, select(0.0, 1.0, m.w < 0.0)));
+  textureStore(out, p, vec4<f32>(c, select(0.0, 1.0, m.w < 0.0)));
 }

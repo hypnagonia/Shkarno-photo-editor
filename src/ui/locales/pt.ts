@@ -561,6 +561,8 @@ export const pt: Dict = {
   "adj.depth": "Profundidade",
   "adj.nearDetail": "Detalhe próximo",
   "adj.farDetail": "Detalhe distante",
+  "adj.zero": "Zerar tudo",
+  "adj.zeroTip": "Todos os controles de Revelação no valor neutro (a foto como está, balanço de branco da câmera, sem ajuste automático). O look e suas camadas permanecem.",
   "adj.reset": "Redefinir tudo para automático",
   "adj.curves": "Curvas (esta foto)",
   "adj.curvesHint": "Toque na curva para adicionar um ponto, arraste para movê-lo, arraste um ponto para fora da caixa para removê-lo. Atrás da curva: como os tons da foto se distribuem (esquerda = preto, direita = branco). O estilo tem suas próprias curvas (Estilo → Editar).",

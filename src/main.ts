@@ -5,7 +5,7 @@
 import "./styles.css";
 import type { Capabilities, ExportFormat, FromWorker, SeriesInfo, StageProfile, Summary, ToWorker, UpscaleInfo, UpscaleMode } from "./engine/protocol.ts";
 import { openSeriesSheet } from "./ui/seriesSheet.ts";
-import { DEPTH_BANDS, type Decision, type DepthBand, type Params } from "./decision/params.ts";
+import { DEPTH_BANDS, defaultParams, type Decision, type DepthBand, type Params } from "./decision/params.ts";
 import { createLookPanel } from "./ui/lookPanel.ts";
 import { createRegionsPanel } from "./ui/regionsPanel.ts";
 import { createLlmPanel } from "./ui/llmPanel.ts";
@@ -299,6 +299,8 @@ let autoDof = (() => { try { return localStorage.getItem("autoDof") === "1"; } c
 let upscaleMode: UpscaleMode = (() => { try { const v = localStorage.getItem("upscaleMode"); return v === "always" || v === "off" ? v : "auto"; } catch { return "auto"; } })();
 /** The open photo (for "back to original size", which reopens it at 1×). */
 let currentFile: File | undefined;
+/** The open photo's camera white balance (Develop's neutral). */
+let cameraWB: { temp: number; tint: number } | undefined;
 /** …and the series it was merged with (reopens merge it again). */
 let currentSeries: { files: File[]; ref?: number } | undefined;
 /** The page died while processing: don't retry automatically — offer a lighter reopen. */
@@ -965,7 +967,34 @@ adjustPane.prepend(acRow);
 
 const resetBtn = el("button", { class: "btn small", text: t("adj.reset") });
 resetBtn.onclick = () => { if (autoParams) { params = structuredClone(autoParams); syncControls(); pushParams(); } };
-adjustPane.append(el("div", { class: "actions" }, resetBtn), el("p", { class: "muted", text: t("adj.amberHint") }));
+/**
+ * Every Develop control at the value that leaves the photo as developed: exposure,
+ * tone, colour, detail, noise, haze, vignette, grain at 0, the camera's own white
+ * balance, no automatic grade (Auto strength 0). The look and your own layers stay.
+ */
+function neutralParams(p: Params): Params {
+  const d = defaultParams(), n = structuredClone(p);
+  n.exposure = 0;
+  n.wb = { ...(cameraWB ?? d.wb) };
+  n.tone = { ...d.tone };
+  n.local = { ...d.local, anchorEV: p.local.anchorEV };
+  n.color = { ...d.color };
+  n.curves = d.curves;
+  n.denoise = { ...d.denoise };
+  n.sharpen = { ...p.sharpen, amount: 0 };
+  n.dehaze = { ...p.dehaze, strength: 0 };
+  n.semantic = d.semantic; n.skin = d.skin; n.distance = d.distance;
+  n.cells = {}; n.cellCurves = {}; n.regionCurves = {}; n.depthCurves = {};
+  n.autoCurves = 0;
+  if (n.vignette) n.vignette = { ...n.vignette, amount: 0 };
+  if (n.grain) n.grain = { ...n.grain, amount: 0 };
+  n.layers = (p.layers ?? []).filter((l) => !l.auto);
+  return n;
+}
+const zeroBtn = el("button", { class: "btn small", text: t("adj.zero") });
+zeroBtn.title = t("adj.zeroTip");
+zeroBtn.onclick = () => { if (params) { params = neutralParams(params); nextLabel = t("adj.zero"); syncControls(); pushParams(); } };
+adjustPane.append(el("div", { class: "actions" }, zeroBtn, resetBtn), el("p", { class: "muted", text: t("adj.amberHint") }));
 
 // Look profiles: browser, palette, reference, editor (src/ui/lookPanel.ts)
 const lookPanel = createLookPanel(lookPane, {
@@ -1610,7 +1639,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       noteAnalysisStage();
       opening = false;
       restored = false;
-      summary = m.summary; decisions = m.decisions; autoParams = m.auto; params = m.params; dofInfo = m.dof;
+      summary = m.summary; decisions = m.decisions; autoParams = m.auto; params = m.params; dofInfo = m.dof; cameraWB = m.cameraWB;
       autoCurveBands = m.autoCurves;
       exportTop.disabled = busy;
       cellCov = m.cellCoverage;

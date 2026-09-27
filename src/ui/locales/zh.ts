@@ -561,6 +561,8 @@ export const zh: Dict = {
   "adj.depth": "景深",
   "adj.nearDetail": "近景细节",
   "adj.farDetail": "远景细节",
+  "adj.zero": "全部归零",
+  "adj.zeroTip": "所有冲洗参数回到中性值（照片原样、相机白平衡、无自动调整）。风格和您的图层保留。",
   "adj.reset": "全部恢复为自动",
   "adj.curves": "曲线（本照片）",
   "adj.curvesHint": "点按曲线添加控制点，拖动以移动，将控制点拖出框外即可删除。曲线背后显示照片的影调分布（左 = 黑，右 = 白）。风格有自己的曲线（风格 → 编辑风格）。",

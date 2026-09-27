@@ -637,7 +637,7 @@ export class Engine {
     // The automatic grade becomes layers (src/layers/auto.ts): visible, editable, removable.
     Object.assign(decision.params, buildAutoLayers(decision.params));
     Object.assign(params, buildAutoLayers(params));
-    this.post({ type: "analysis", summary: this.summary(file.name), decisions: decision.decisions, auto: decision.params, params, dof: decision.dofSuggestion, exposureSuggestion: decision.exposureSuggestion, autoCurves: decision.autoCurves, cellCoverage: decision.cellCoverage, noDepth: flatDepth ? (scene.log.find((l) => /Depth skipped|Depth unavailable|Scene analysis unavailable/.test(l)) ?? "no depth map") : undefined });
+    this.post({ type: "analysis", summary: this.summary(file.name), decisions: decision.decisions, auto: decision.params, params, dof: decision.dofSuggestion, exposureSuggestion: decision.exposureSuggestion, autoCurves: decision.autoCurves, cellCoverage: decision.cellCoverage, cameraWB: { temp: work.camera?.temp ?? 6504, tint: work.camera?.tint ?? 0 }, noDepth: flatDepth ? (scene.log.find((l) => /Depth skipped|Depth unavailable|Scene analysis unavailable/.test(l)) ?? "no depth map") : undefined });
     this.post({ type: "profile", stages: P.stages });
     this.postSeries();
 
