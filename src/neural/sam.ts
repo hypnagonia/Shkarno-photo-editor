@@ -23,16 +23,24 @@ function spawn(): Worker {
   return new Worker(new URL("./samWorker.ts", import.meta.url), { type: "module" });
 }
 
-/** One request/answer with a worker (the first message of the matching type, or an error). */
+/** Longest wait for each answer (model download on a slow phone included); past it the worker is stuck. */
+const TIMEOUT = { embedding: 180_000, ready: 60_000, masks: 20_000 } as const;
+
+/**
+ * One request/answer with a worker (the first message of the matching type, or an
+ * error). No answer in time (a worker killed or hung by the OS) terminates the
+ * worker and rejects, so a tap never waits forever.
+ */
 function ask<T extends Reply["type"]>(w: Worker, msg: unknown, want: T, id?: number, transfer: Transferable[] = []): Promise<Extract<Reply, { type: T }>> {
   return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { done(); w.terminate(); reject(new Error("Selection timed out")); }, TIMEOUT[want as keyof typeof TIMEOUT] ?? 60_000);
     const onMsg = (ev: MessageEvent<Reply>) => {
       const r = ev.data;
       if (r.type === "error" && (id === undefined || r.id === id || r.id === undefined)) { done(); reject(new Error(r.error)); }
       else if (r.type === want && (id === undefined || (r as { id?: number }).id === id)) { done(); resolve(r as Extract<Reply, { type: T }>); }
     };
     const onErr = (e: ErrorEvent) => { e.preventDefault(); done(); reject(new Error(e.message || "Selection stopped")); };
-    const done = () => { w.removeEventListener("message", onMsg); w.removeEventListener("error", onErr); };
+    const done = () => { clearTimeout(timer); w.removeEventListener("message", onMsg); w.removeEventListener("error", onErr); };
     w.addEventListener("message", onMsg);
     w.addEventListener("error", onErr);
     w.postMessage(msg, transfer);
@@ -77,9 +85,12 @@ export class SamSelector {
     if (!this.worker) {
       // Closed while idle: a new worker gets the embeddings (no second encode).
       this.worker = spawn();
-      this.workerReady = ask(this.worker, { type: "init", base: this.base, phone: this.phone, emb: this.emb.slice() }, "ready");
+      // A failed start drops this worker, so the next tap starts a fresh one (not the same rejection forever).
+      this.workerReady = ask(this.worker, { type: "init", base: this.base, phone: this.phone, emb: this.emb.slice() }, "ready")
+        .catch((e) => { this.dispose(); throw e; });
     }
     await this.workerReady;
+    if (!this.worker) throw new Error("Selection stopped");
     const [pw, ph] = this.dims;
     // SAM's point prompt: coordinates in the 1024 square, plus a padding point (label −1) when there is no box.
     const coords = new Float32Array((points.length + 1) * 2);
@@ -89,8 +100,11 @@ export class SamSelector {
     const id = this.nextId++;
     clearTimeout(this.idle);
     try {
-      const r = await ask(this.worker, { type: "decode", id, coords, labels, w: pw, h: ph }, "masks", id);
+      const r = await ask(this.worker!, { type: "decode", id, coords, labels, w: pw, h: ph }, "masks", id);
       return { low: r.low, iou: r.iou };
+    } catch (e) {
+      this.dispose(); // a worker that failed a decode (or was killed) is not reused
+      throw e;
     } finally {
       this.idle = setTimeout(() => this.dispose(), 30_000) as unknown as number;
     }

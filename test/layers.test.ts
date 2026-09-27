@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hueSatTable, isNeutralLayer, makeLayer } from "../src/layers/model.ts";
+import { BLEND_GROUPS, BLEND_MODES, blendRamp, hueSatTable, isNeutralLayer, makeLayer } from "../src/layers/model.ts";
 import { packLayers, RECORD } from "../src/layers/gpu.ts";
 import { buildAutoLayers } from "../src/layers/auto.ts";
 import { defaultParams } from "../src/decision/params.ts";
@@ -143,4 +143,17 @@ test("shape masks pack their style, angle, size, centre and softness", async () 
   assert.ok(Math.abs(r[9] - 0.6) < 1e-6 && Math.abs(r[10] - 0.3) < 1e-6 && Math.abs(r[15] - 0.4) < 1e-6); // size, x, softness
   assert.equal(r[32], 9); assert.equal(r[33], 0); assert.equal(r[35], 2); // part: linear shape, intersect
   assert.ok(Math.abs(r[36] - Math.PI / 2) < 1e-6); // 90° in radians
+});
+
+test("blend if: ramps packed into p2 / p3, no limit = pass-through", () => {
+  assert.deepEqual(blendRamp(undefined), [0, 0, 1, 1]);
+  assert.deepEqual(blendRamp({ low: 0, high: 1, soft: 0.3 }), [0, 0, 1, 1]);
+  const r = blendRamp({ low: 0.4, high: 0.8, soft: 0.2 });
+  assert.ok(Math.abs(r[0] - 0.3) < 1e-9 && Math.abs(r[1] - 0.5) < 1e-9 && Math.abs(r[2] - 0.7) < 1e-9 && Math.abs(r[3] - 0.9) < 1e-9);
+  const l = makeLayer("curves", "c", { blend: "linearDodge", blendIf: { this: { low: 0, high: 1, soft: 0 }, under: { low: 0.5, high: 1, soft: 0 } } });
+  const pk = packLayers([l]);
+  assert.equal(pk.records[1], BLEND_MODES.indexOf("linearDodge"));
+  assert.deepEqual([...pk.records.subarray(24, 32)], [0, 0, 1, 1, 0.5, 0.5, 1, 1]);
+  // Every mode is in exactly one menu group.
+  assert.deepEqual(BLEND_GROUPS.flatMap((g) => g.modes).sort(), [...BLEND_MODES].sort());
 });

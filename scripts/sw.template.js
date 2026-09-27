@@ -16,15 +16,19 @@ self.addEventListener("install", (e) => {
     const c = await caches.open(SHELL);
     // One by one: a single failed request must not lose the whole install.
     await Promise.all(PRECACHE.map((u) => c.add(new Request(u, { cache: "reload" })).catch(() => {})));
-    await self.skipWaiting();
+    // No skipWaiting: pages already open keep the version they started with (their lazily
+    // loaded chunks have that build's names); the new one takes over on the next start.
   })());
 });
 
 self.addEventListener("activate", (e) => {
   e.waitUntil((async () => {
     for (const k of await caches.keys()) {
-      if ((k.startsWith("shell-") && k !== SHELL) || k.startsWith("ort-")) await caches.delete(k);
+      if (k.startsWith("ort-")) await caches.delete(k);
     }
+    // Keep the last three app shells: a page opened before a deploy can still load its chunks.
+    const shells = (await caches.keys()).filter((k) => k.startsWith("shell-") && k !== SHELL);
+    for (const k of shells.slice(0, Math.max(0, shells.length - 2))) await caches.delete(k);
     await self.clients.claim();
   })());
 });
@@ -57,7 +61,8 @@ self.addEventListener("fetch", (e) => {
 
 async function cacheFirst(name, req) {
   const c = await caches.open(name);
-  const hit = await c.match(req, { ignoreSearch: true });
+  // Any kept shell has it: hashed file names never change content.
+  const hit = await caches.match(req, { ignoreSearch: true });
   if (hit) return hit;
   const res = await fetch(req);
   // Only whole, successful same-origin answers; never an HTML fallback for a binary.

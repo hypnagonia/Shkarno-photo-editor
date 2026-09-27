@@ -14,7 +14,7 @@ import type { Params, Region, DepthBand } from "../../decision/params.ts";
 import { DEPTH_BANDS } from "../../decision/params.ts";
 import { GROUPS } from "../../neural/scene.ts";
 import type { HistTarget } from "../../analysis/previewHist.ts";
-import { BLEND_MODES, HUE_RANGES, MASK_OPS, MAX_MASK_PARTS, RANGE_CENTRE, makeLayer, newLayerDefaults, newId, type HueRange, type Layer, type LayerParams, type LayerType, type MaskKind, type MaskOp, type MaskPart, type MaskShape, type SmartMask, selectKey } from "../../layers/model.ts";
+import { BLEND_GROUPS, fullRange, HUE_RANGES, MASK_OPS, MAX_MASK_PARTS, RANGE_CENTRE, makeLayer, newLayerDefaults, newId, type HueRange, type Layer, type LayerParams, type LayerType, type MaskKind, type MaskOp, type MaskPart, type MaskShape, type SmartMask, selectKey } from "../../layers/model.ts";
 import type { PickInfo } from "../../engine/protocol.ts";
 import { oklabToLinSrgb } from "../../color/oklab.ts";
 import { createToneCurves } from "../toneCurves.ts";
@@ -22,7 +22,7 @@ import { t, tOr } from "../i18n.ts";
 import { icon } from "./icons.ts";
 import { createGradientEditor } from "./gradientEditor.ts";
 import { defaultShape, liveLayers } from "../../layers/gpu.ts";
-import { flareLayers, moveFlare } from "../../layers/flare.ts";
+import { flareLayers, flareLight, moveFlare } from "../../layers/flare.ts";
 import { el } from "../dom.ts";
 
 type Ctx = {
@@ -174,16 +174,19 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     // then a tap on the light places it exactly.
     const b = el("button", { class: "lay-addbtn" }, el("span", { class: "g" }, icon("flare", 19)), el("span", { text: t("flare.add") }));
     b.onclick = async () => {
-      const p = ctx.params(); if (!p) return;
+      const p0 = ctx.params(); if (!p0) return;
       addSheet.hidden = true;
       const L = (await ctx.brightest?.().catch(() => undefined)) ?? { x: 0.3, y: 0.2 };
+      // Undo or another photo meanwhile: the edit this was for is gone.
+      const p = ctx.params();
+      if (p !== p0 || !p) return;
       const ls = flareLayers(L, { veil: t("flare.veil"), glow: t("flare.glow"), streak: t("flare.streak"), ghost: t("flare.ghost") });
       const at = p.layers.findIndex((x) => x.id === selected);
       p.layers.splice(at + 1, 0, ...ls);
       selected = ls[1].id; tab = "adjust";
       ctx.changed(t("flare.add"));
+      setPlacing(ls[0].flare!.set); // before render: the Move light button shows "Tap the light"
       render();
-      setPlacing(ls[0].flare!.set);
     };
     return b;
   })()));
@@ -369,6 +372,8 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
   function placeAt(x: number, y: number): boolean {
     const p = ctx.params();
     if (!placing || !p) return false;
+    // The flare is gone (undo, another photo): stop waiting, the tap is an ordinary one.
+    if (!flareLight(p.layers, placing)) { setPlacing(undefined); return false; }
     moveFlare(p.layers, placing, { x, y });
     setPlacing(undefined);
     ctx.changed(t("flare.moved"));
@@ -392,9 +397,12 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     open = parts.length - 1;
     return true;
   }
-  function onPick(info: PickInfo): boolean {
+  function onPick(info: PickInfo, tapped?: { layer: string; as: typeof pickAs }): boolean {
     const l = sel();
     if (!l || !picking) return false;
+    // The answer belongs to the layer (and reading) the tap was for: another one selected meanwhile gets nothing.
+    if (tapped && tapped.layer !== l.id) return false;
+    const as = tapped?.as ?? pickAs;
     const m = l.mask;
     // Nothing chosen yet (the mask is the whole photo): a tap always adds.
     const empty = m.kind === "all" && !(m.parts ?? []).length;
@@ -407,7 +415,7 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
       renderProps();
       return true;
     }
-    if (!addPiece(l, shapeFromPick(info, pickAs), inside ? "subtract" : "add")) { ctx.notice?.(t("mask.full")); return false; }
+    if (!addPiece(l, shapeFromPick(info, as), inside ? "subtract" : "add")) { ctx.notice?.(t("mask.full")); return false; }
     edit(t(inside ? "hist.maskRemove" : "hist.maskAdd", { name: layerName(l) }));
     renderProps();
     return true;
@@ -417,8 +425,12 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     const m = l.mask;
     const parts = m.parts ?? [];
     if (key === "main") {
-      const next = parts[0]?.op === "add" ? parts.shift()! : undefined;
-      l.mask = next ? ({ ...m, ...next, op: undefined, parts } as SmartMask) : { ...m, kind: "all", invert: false, feather: 1, points: undefined, parts };
+      // The first added part takes the main place (removals keep working on it); with none,
+      // "everything" is under the removals.
+      const i = parts.findIndex((q) => q.op === "add");
+      const next = i >= 0 ? parts.splice(i, 1)[0] : undefined;
+      const clean = { points: undefined, color: undefined, depth: undefined, lum: undefined, region: undefined, band: undefined, level: undefined, tol: undefined, shape: undefined };
+      l.mask = next ? ({ ...m, ...clean, ...next, op: undefined, parts } as SmartMask) : { ...m, ...clean, kind: "all", invert: false, feather: 1, parts };
     } else parts.splice(key, 1);
     open = undefined;
   }
@@ -598,7 +610,8 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     const i = l ? liveIndex(l.id) : -1;
     const want = visible && tab === "mask" && showMask && i >= 0 ? i : undefined;
     // Taps pick while the selected layer's Mask tab is open, and only then.
-    setPicking(visible && tab === "mask" && !!l);
+    // (A hidden layer has no mask to read under a tap: no picking there.)
+    setPicking(visible && tab === "mask" && !!l && i >= 0);
     if (want === maskSent) return;
     maskSent = want;
     ctx.showMask(want);
@@ -606,11 +619,77 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
 
   // ------------------------------------------------------------------ blend
   function blendBody(l: Layer): HTMLElement[] {
+    const pick = (b: Layer["blend"]) => { l.blend = b; edit(t("hist.blend", { name: layerName(l) })); renderProps(); };
+    const modes = el("div", { class: "blend-groups" }, ...BLEND_GROUPS.map((g) =>
+      chips(g.modes.map((b) => ({ id: b, label: t(`blend.${b}`) })), l.blend, pick)));
+    const bi = l.blendIf;
+    const range = (which: "this" | "under") => {
+      const get = () => l.blendIf?.[which] ?? fullRange();
+      const set = (r: Partial<ReturnType<typeof fullRange>>) => {
+        l.blendIf ??= { this: fullRange(), under: fullRange() };
+        Object.assign(l.blendIf[which], r);
+        const { this: a, under: b } = l.blendIf;
+        if (a.low <= 0 && a.high >= 1 && b.low <= 0 && b.high >= 1) l.blendIf = undefined; // nothing limited
+      };
+      return [
+        el("div", { class: "blendif-label", text: t(`blend.if.${which}`) }),
+        lumaBar(() => get(), (low, high) => set({ low, high })),
+        slider(t("blend.if.soft"), 0, 0.5, 0.01, () => get().soft, (v) => set({ soft: v }), (v) => `${Math.round(v * 100)}`, 0.2),
+      ];
+    };
     return [
       el("div", { class: "group-title", text: t("blend.mode") }),
-      chips(BLEND_MODES.map((b) => ({ id: b, label: t(`blend.${b}`) })), l.blend, (b) => { l.blend = b; edit(t("hist.blend", { name: layerName(l) })); renderProps(); }),
+      modes,
       slider(t("blend.opacity"), 0, 1, 0.01, () => l.opacity, (v) => (l.opacity = v), (v) => `${Math.round(v * 100)}%`, 1),
+      el("div", { class: "group-title", text: t("blend.if") }),
+      el("p", { class: "muted", text: t("blend.ifTip") }),
+      ...range("this"),
+      ...range("under"),
+      ...(bi ? [(() => { const b = el("button", { class: "btn small ghost", text: t("blend.if.reset") }); b.onclick = () => { l.blendIf = undefined; edit(); renderProps(); }; return b; })()] : []),
     ];
+  }
+
+  /**
+   * A brightness range with two handles (black → white bar): drag a handle, or tap
+   * the bar to move the nearer one there. Vertical moves scroll the panel.
+   */
+  function lumaBar(get: () => { low: number; high: number }, set: (low: number, high: number) => void): HTMLElement {
+    const lo = el("span", { class: "rb-knob" }), hi = el("span", { class: "rb-knob" });
+    const shade = [el("span", { class: "rb-off" }), el("span", { class: "rb-off" })];
+    const bar = el("div", { class: "rangebar", role: "group" }, shade[0], shade[1], lo, hi);
+    const show = () => {
+      const r = get();
+      lo.style.left = `${r.low * 100}%`; hi.style.left = `${r.high * 100}%`;
+      shade[0].style.cssText = `left:0;width:${r.low * 100}%`; shade[1].style.cssText = `left:${r.high * 100}%;right:0`;
+      bar.title = `${Math.round(r.low * 255)} – ${Math.round(r.high * 255)}`;
+    };
+    let which: "low" | "high" | undefined, x0 = 0, y0 = 0, moving = false;
+    const at = (x: number) => { const b = bar.getBoundingClientRect(); return Math.min(1, Math.max(0, (x - b.left) / Math.max(1, b.width))); };
+    const apply = (x: number) => {
+      const v = Math.round(at(x) * 255) / 255, r = get();
+      if (which === "low") set(Math.min(v, r.high), r.high); else set(r.low, Math.max(v, r.low));
+      show(); edit();
+    };
+    bar.addEventListener("pointerdown", (e) => {
+      const v = at(e.clientX), r = get();
+      // The nearer handle; when both are at one spot, the one on the side of the touch.
+      which = r.low === r.high ? (v < r.low ? "low" : "high") : Math.abs(v - r.low) < Math.abs(v - r.high) ? "low" : "high";
+      x0 = e.clientX; y0 = e.clientY; moving = false;
+      bar.setPointerCapture(e.pointerId);
+    });
+    bar.addEventListener("pointermove", (e) => {
+      if (!which) return;
+      if (!moving) {
+        if (Math.hypot(e.clientX - x0, e.clientY - y0) < 6) return;
+        if (Math.abs(e.clientY - y0) > Math.abs(e.clientX - x0)) { which = undefined; return; } // a scroll
+        moving = true;
+      }
+      apply(e.clientX);
+    });
+    bar.addEventListener("pointerup", (e) => { if (which && !moving) apply(e.clientX); which = undefined; });
+    bar.addEventListener("pointercancel", () => { which = undefined; });
+    show();
+    return bar;
   }
 
   // ------------------------------------------------------------------ properties
@@ -689,15 +768,20 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     /** A tap on the photo while a lens flare waits for its light: taken (true), or not a placing tap. */
     placeAt(x: number, y: number): boolean { return placeAt(x, y); },
     /** The engine's answer to a tap in pick mode. */
-    onPick(info: PickInfo): boolean { return onPick(info); },
+    onPick(info: PickInfo, tapped?: { layer: string; as: "object" | "color" | "depth" }): boolean { return onPick(info, tapped); },
     /** What a tap on the photo edits now: the selected layer (index among the live layers) and whether taps select objects. */
-    pickTarget(): { layer: number; object: boolean } | undefined {
+    pickTarget(): { layer: number; object: boolean; id: string; as: "object" | "color" | "depth" } | undefined {
       const l = sel();
       if (!picking || !l) return undefined;
-      return { layer: liveIndex(l.id), object: pickAs === "object" };
+      return { layer: liveIndex(l.id), object: pickAs === "object", id: l.id, as: pickAs };
     },
     /** Pick mode ended from outside (another photo tool took the taps). */
     stopPicking() { if (picking) { setPicking(false); renderProps(); } },
+    /** A new photo: nothing of the previous photo's editing state survives (tab, open piece, picking, a flare waiting for its light). */
+    reset() {
+      tab = "adjust"; open = undefined; maskSent = null; placing = undefined;
+      if (picking) { picking = false; ctx.pickMode(false); }
+    },
   };
 }
 

@@ -482,3 +482,11 @@ header.top .push { margin-left: auto; }
 .check-badge.bad { background: var(--danger); color: #fff; }
 .check-fix.solving { color: var(--muted); font-style: italic; }
 .flare-row { margin: 0 0 10px; }
+
+/* Blend tab: mode groups (as Photoshop's menu dividers) and Blend If range bars */
+.blend-groups { display: flex; flex-direction: column; gap: 8px; }
+.blend-groups .chips + .chips { padding-top: 8px; border-top: 1px dashed var(--line); }
+.blendif-label { margin-top: 10px; font-size: 12px; color: var(--soft); }
+.rangebar { position: relative; height: 14px; margin: 8px 9px 10px; background: linear-gradient(90deg, #000, #fff); border: 1px solid var(--line); touch-action: pan-y; cursor: pointer; -webkit-user-select: none; user-select: none; }
+.rangebar .rb-off { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(45deg, rgba(128,128,128,.55) 0 3px, transparent 3px 6px); pointer-events: none; }
+.rangebar .rb-knob { position: absolute; top: -5px; width: 12px; height: 22px; margin-left: -6px; background: var(--text); border: 2px solid var(--bg); box-sizing: border-box; pointer-events: none; }

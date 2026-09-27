@@ -8,7 +8,8 @@ struct LayerRec {
   m0: vec4<f32>,  // mask kind, region (11 = skin), band, invert
   m1: vec4<f32>,  // mask values 0–2, feather
   r: vec4<f32>,   // density, except skin, mask values 3–4
-  p0: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<f32>, // type parameters
+  p0: vec4<f32>, p1: vec4<f32>, // type parameters
+  p2: vec4<f32>, p3: vec4<f32>, // Blend If ramps: this layer, under it (hidden below, full from, full to, hidden above)
   // Extra mask parts, three vec4 each: kind (0 = none), region, band, op | values 0–3 | value 4, invert, feather, _
   q: array<vec4<f32>, 12>,
 }
@@ -273,6 +274,18 @@ fn op_basic(L: LayerRec, e: vec3<f32>) -> vec3<f32> {
   return lab_to_enc(vec3<f32>(lab.x, ab));
 }
 
+fn burn(b: f32, t: f32) -> f32 {
+  if (b >= 1.0) { return 1.0; }
+  if (t <= 0.0) { return 0.0; }
+  return 1.0 - min(1.0, (1.0 - b) / t);
+}
+fn dodge(b: f32, t: f32) -> f32 {
+  if (b <= 0.0) { return 0.0; }
+  if (t >= 1.0) { return 1.0; }
+  return min(1.0, b / (1.0 - t));
+}
+
+// Per channel, W3C / Photoshop formulas (b = below, t = this layer, both 0…1 display-encoded).
 fn blend_ch(mode: u32, b: f32, t: f32) -> f32 {
   switch mode {
     case 1u: { return b * t; }
@@ -285,12 +298,29 @@ fn blend_ch(mode: u32, b: f32, t: f32) -> f32 {
     case 5u: { return select(1.0 - 2.0 * (1.0 - t) * (1.0 - b), 2.0 * b * t, t < 0.5); }
     case 6u: { return min(b, t); }
     case 7u: { return max(b, t); }
+    case 12u: { return burn(b, t); }
+    case 13u: { return b + t - 1.0; }                 // linear burn
+    case 14u: { return dodge(b, t); }
+    case 15u: { return b + t; }                       // linear dodge (add)
+    case 16u: { return select(dodge(b, 2.0 * t - 1.0), burn(b, 2.0 * t), t < 0.5); } // vivid light
+    case 17u: { return b + 2.0 * t - 1.0; }           // linear light
+    case 18u: { return select(max(b, 2.0 * t - 1.0), min(b, 2.0 * t), t < 0.5); } // pin light
+    case 19u: { return select(0.0, 1.0, b + t >= 1.0); } // hard mix
+    case 20u: { return abs(b - t); }
+    case 21u: { return b + t - 2.0 * b * t; }         // exclusion
+    case 22u: { return b - t; }                       // subtract
+    case 23u: { return select(1.0, min(1.0, b / t), t > 0.0); } // divide
     default: { return t; }
   }
 }
 
 fn blend_modes(mode: u32, b: vec3<f32>, t: vec3<f32>) -> vec3<f32> {
-  if (mode <= 7u) { return vec3<f32>(blend_ch(mode, b.r, t.r), blend_ch(mode, b.g, t.g), blend_ch(mode, b.b, t.b)); }
+  if (mode <= 7u || (mode >= 12u && mode <= 23u)) {
+    return vec3<f32>(blend_ch(mode, b.r, t.r), blend_ch(mode, b.g, t.g), blend_ch(mode, b.b, t.b));
+  }
+  // Darker / lighter colour: the whole colour of whichever is darker / lighter.
+  if (mode == 24u) { return select(b, t, dot(t, LUMAP3) < dot(b, LUMAP3)); }
+  if (mode == 25u) { return select(b, t, dot(t, LUMAP3) > dot(b, LUMAP3)); }
   // Hue / saturation / color / luminosity: in OkLab, so lightness is perceptual.
   let lb = enc_to_lab(b);
   let lt = enc_to_lab(t);
@@ -302,6 +332,13 @@ fn blend_modes(mode: u32, b: vec3<f32>, t: vec3<f32>) -> vec3<f32> {
   else if (mode == 10u) { o = vec3<f32>(lb.x, lt.yz); }
   else { o = vec3<f32>(lt.x, lb.yz); }
   return lab_to_enc(o);
+}
+
+/** Blend If: how much a brightness `y` lets the layer through (ramp = hidden below, full from, full to, hidden above). */
+fn blend_if(y: f32, r: vec4<f32>) -> f32 {
+  let lo = select(clamp((y - r.x) / max(r.y - r.x, 1e-4), 0.0, 1.0), 1.0, r.y <= 0.0);
+  let hi = select(clamp((r.w - y) / max(r.w - r.z, 1e-4), 0.0, 1.0), 1.0, r.z >= 1.0);
+  return lo * hi;
 }
 
 /** Gradient Map: brightness → a colour of the gradient (alpha in .a). */
@@ -350,6 +387,9 @@ fn apply_layers(e0: vec3<f32>, g: array<f32, 12>, dist: f32, skin_w: f32, uv: ve
       case 6u: { let c = op_gradient_fill(L, uv, aspect); t = c.rgb; w *= c.a; }
       default: { }
     }
+    // Blend If: judged on this layer's result and on the image under it (display brightness).
+    w *= blend_if(clamp(dot(t, LUMAP3), 0.0, 1.0), L.p2) * blend_if(clamp(dot(e, LUMAP3), 0.0, 1.0), L.p3);
+    if (w < 2e-3) { continue; }
     e = mix(e, clamp(blend_modes(u32(L.a.y), e, t), vec3<f32>(0.0), vec3<f32>(1.0)), w);
   }
   if (u.lay.w != 0u) { e = protect_highlights(e0, e); }

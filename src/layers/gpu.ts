@@ -16,7 +16,7 @@
 import { GROUPS } from "../neural/scene.ts";
 import { DEPTH_BANDS, type Curves } from "../decision/params.ts";
 import { curveLUT, CURVE_LUT_SIZE } from "../render/curves.ts";
-import { BLEND_MODES, hueSatTable, LAYER_TYPES, MAX_MASK_PARTS, type Layer, type LayerParams, type MaskKind, type MaskOp, type MaskShape } from "./model.ts";
+import { BLEND_MODES, blendRamp, hueSatTable, LAYER_TYPES, MAX_MASK_PARTS, type Layer, type LayerParams, type MaskKind, type MaskOp, type MaskShape } from "./model.ts";
 import { gradientTable } from "./gradient.ts";
 
 export const RECORD = 80;
@@ -87,6 +87,8 @@ export function packLayers(layers: Layer[], autoStrength = 1, enable?: { curves?
     r[1] = Math.max(0, BLEND_MODES.indexOf(l.blend));
     r[2] = Math.min(1, Math.max(0, l.opacity * (l.auto ? Math.min(1, Math.max(0, autoStrength)) : 1)));
     r[3] = -1;
+    // Blend If ramps (p2 = this layer, p3 = under it); type parameters use p0–p1 only.
+    r.set(blendRamp(l.blendIf?.this), 24); r.set(blendRamp(l.blendIf?.under), 28);
     const m = l.mask;
     r[4] = MASK_KIND[m.kind];
     r[5] = regionIndex(m);

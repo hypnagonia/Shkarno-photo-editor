@@ -1391,7 +1391,11 @@ export class Engine {
     const c = this.lastCheck;
     this.lastCheck = undefined;
     if (!c || c.s !== this.s) return; // another photo since
-    await this.solveFixes(c.s, c.items, c.seg, c.scene, c.camera, (it) => onFix(it.id, it.fix!, !!it.fixPartial));
+    try {
+      await this.solveFixes(c.s, c.items, c.seg, c.scene, c.camera, (it) => onFix(it.id, it.fix!, !!it.fixPartial));
+    } catch (e) {
+      if (!(e instanceof StaleCheck)) throw e; // edited or another photo: the answers would be for old settings
+    }
   }
 
   /**
@@ -1401,25 +1405,30 @@ export class Engine {
    * on renders at 768 px, to where that crosses zero — a comfortable value, not the
    * edge of "fine". If no control gets there, the layer whose opacity does; failing
    * that, the control that helps most (a partial fix).
+   *
+   * Each render is its own short exclusive job, so slider edits and previews are
+   * served in between; an edit (new params) or another photo stops the solving.
    */
   private async solveFixes(s: Session, items: CheckItem[], seg: NonNullable<CheckInput["seg"]>, scene: CheckInput["scene"], camera: CheckInput["camera"], onFix: (it: CheckItem) => void) {
     const todo = items.filter((i) => i.level !== "ok" && i.err !== undefined);
     if (!todo.length) return;
     const [{ checkPhoto, planesOf }, { getPath, leversFor, setPath, stepOf }] = await checkCode();
     const t0 = performance.now();
-    let renders = 0;
-    const t = await this.ensureThumb(768);
-    const src = { base: t.base, denoised: t.denoised, width: t.w, height: t.h, fullWidth: s.work.width };
-    const render = async (p: Params) => {
+    let renders = 0, size = "";
+    const base = s.params;
+    const render = (p: Params) => this.exclusive(async () => {
+      if (this.s !== s || s.params !== base) throw new StaleCheck();
       renders++;
+      const t = await this.ensureThumb(768);
+      size = `${t.w}×${t.h}`;
+      const src = { base: t.base, denoised: t.denoised, width: t.w, height: t.h, fullWidth: s.work.width };
       const r = await this.renderer.render(src, s.maps, p, { wb: this.wbFor(p), gain: s.gain, lightLinear: s.lightLinear, output: "p38", dither: false }, p.enable.dof && p.dof.strength > 0);
       return { rgba: new Uint8Array(await this.gpu.readTexture(r.tex, 0, 0, t.w, t.h, 4)), w: t.w, h: t.h };
-    };
+    });
     const beforeImg = await render(this.cameraParams());
     const beforePlanes = planesOf(beforeImg);
     const errWith = async (id: CheckItem["id"], p: Params) =>
       checkPhoto({ final: await render(p), before: beforeImg, seg, scene, camera }, id, beforePlanes).find((i) => i.id === id)?.err ?? -1;
-    const base = s.params;
     for (const it of todo) {
       const e0 = await errWith(it.id, base);
       if (e0 <= 0) continue; // comfortable at this size already
@@ -1431,13 +1440,28 @@ export class Engine {
         // Walk from the current value towards the end in 6 steps to the first comfortable
         // value (a two-sided target like exposure is passed, not just approached), then
         // bisect between it and the step before.
-        let prev = v0, found: number | undefined, minE = e0, minV = v0;
+        let prev = v0, prevE = e0, before2 = v0, found: number | undefined, minE = e0, minV = v0;
         for (let k = 1; k <= 6; k++) {
           const v = v0 + ((lv.bound - v0) * k) / 6;
           const e = await at(v);
           if (e < minE) { minE = e; minV = v; }
           if (e <= 0) { found = v; break; }
-          prev = v;
+          if (e > prevE && k > 1) {
+            // Worse again after getting better: a narrow comfortable window may lie between
+            // (stepped over). Look for the best value in (before2, v) by golden-section search.
+            let a = before2, b = v;
+            for (let g = 0; g < 5 && Math.abs(b - a) > step; g++) {
+              const m1 = b - (b - a) * 0.618, m2 = a + (b - a) * 0.618;
+              const [e1, e2] = [await at(m1), await at(m2)];
+              if (e1 < minE) { minE = e1; minV = m1; }
+              if (e2 < minE) { minE = e2; minV = m2; }
+              if (Math.min(e1, e2) <= 0) break;
+              if (e1 < e2) b = m2; else a = m1;
+            }
+            if (minE <= 0) { found = minV; prev = before2; }
+            break;
+          }
+          before2 = prev; prev = v; prevE = e;
         }
         if (found === undefined) {
           // Not all the way: remember the value that helps most.
@@ -1465,7 +1489,7 @@ export class Engine {
       if (!it.fix && best) { it.fix = [best.change]; it.fixPartial = true; }
       if (it.fix) onFix(it);
     }
-    this.log(`check fixes: ${todo.length} findings, ${renders} renders at ${t.w}×${t.h}, ${Math.round(performance.now() - t0)} ms`);
+    this.log(`check fixes: ${todo.length} findings, ${renders} renders at ${size}, ${Math.round(performance.now() - t0)} ms`);
   }
 
   /**
@@ -1559,3 +1583,6 @@ function exposureGain(rgba: Float32Array): number {
   k = Math.min(k, 1.6 / Math.max(p99, 1e-5), 32);
   return Math.max(0.25, k);
 }
+
+/** The Check's fixes were being worked out for settings (or a photo) that changed since. */
+class StaleCheck extends Error {}

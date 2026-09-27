@@ -17,7 +17,7 @@ import { AUTO_LAYERS_VERSION } from "./layers/auto.ts";
 import { histogramOf } from "./analysis/previewHist.ts";
 import { applyAutoCurves, type AutoCurveBands } from "./decision/autoCurves.ts";
 import { isFlat } from "./render/curves.ts";
-import { crashedInAnalysis, crashedWhileProcessing, forgetPendingParams, lastStage, markCompleted, markInflight, noteAnalysis, noteStage, rememberParams, rememberPhoto, restorablePhoto } from "./ui/session.ts";
+import { consumeCrash, crashInfo, crashedInAnalysis, crashedWhileProcessing, forgetPendingParams, lastStage, markCompleted, markInflight, noteAnalysis, noteStage, rememberParams, rememberPhoto, restorablePhoto } from "./ui/session.ts";
 import { LANGS, LANG_NAMES, lang, setLang, storedLang, t, tOr, type Lang } from "./ui/i18n.ts";
 import { el } from "./ui/dom.ts";
 import { autotestAllowed } from "./autotest.ts";
@@ -170,6 +170,22 @@ let maskPicking = false;
  * is marked on the photo at once and "Selecting…" shows until the mask is back.
  */
 let pickBusy = false, lastPickAt = 0, pickTimer = 0, pickAwaitsPreview = false;
+/** The layer and reading the pending tap was for (its answer goes to that layer only). */
+let pickFor: { layer: string; as: "object" | "color" | "depth" } | undefined;
+
+/**
+ * One request to the engine and its answer — always settles: with `fallback` when the
+ * engine reports an error instead (a lost GPU, no photo) or does not answer in `ms`.
+ */
+function askEngine<T>(req: ToWorker, answer: (m: FromWorker) => T | undefined, fallback: T, ms = 15_000): Promise<T> {
+  return new Promise((resolve) => {
+    const done = (v: T) => { clearTimeout(timer); engineListeners.delete(f); resolve(v); };
+    const f = (m: FromWorker) => { if (m.type === "error") return done(fallback); const v = answer(m); if (v !== undefined) done(v); };
+    const timer = setTimeout(() => done(fallback), ms);
+    engineListeners.add(f);
+    send(req);
+  });
+}
 let pickMark: HTMLElement | undefined;
 function maskTap(x: number, y: number, cx: number, cy: number) {
   // A lens flare waiting for its light takes the tap itself (no engine round trip).
@@ -178,6 +194,7 @@ function maskTap(x: number, y: number, cx: number, cy: number) {
   if (pickBusy || now - lastPickAt < 400) return;
   const target = layersPanel.pickTarget();
   if (!target) return;
+  pickFor = { layer: target.id, as: target.as };
   pickBusy = true;
   lastPickAt = now;
   pickMark?.remove();
@@ -203,8 +220,7 @@ function pickDone() {
   if (m) { m.classList.remove("busy"); m.classList.add("done"); setTimeout(() => m.remove(), 450); }
   if (maskPicking) { badge.textContent = t("mask.tapHint"); badge.classList.add("on"); }
 }
-/** Callers waiting for the photo's colours (the engine's next "palette" answer). */
-const paletteWaiters: Array<(s: ColorStats) => void> = [];
+
 /** A ring being dragged: which one, where it started, where it is now. */
 let drag: { index: number; x0: number; y0: number; x: number; y: number; moved: boolean; ox: number; oy: number } | undefined;
 /** Where the lone automatic ring was dropped, until the engine's reply makes it a point. */
@@ -329,7 +345,7 @@ function baseView(): { type: "view"; view: 0 | 1 | 2 | 6; region?: number } {
 let opening = false;
 function openFile(f: File, restore?: Params, upscaleOverride?: UpscaleMode) {
   opening = true;
-  layersPanel.stopPicking(); // taps on the next photo start out normal
+  layersPanel.reset(); // nothing of the previous photo's editing state (tab, picking, a flare waiting) survives
   forgetPendingParams();
   // A mask shown for the previous photo's layer must not colour the new one's first previews.
   if (maskIndex !== undefined) { maskIndex = undefined; send(baseView()); }
@@ -475,6 +491,7 @@ function shownFocusPoints(): Array<{ x: number; y: number; auto?: boolean }> {
 function renderRings() {
   // Rings are an editing aid: only shown while picking focus points.
   const pts = shownFocusPoints();
+  if (!pts.length && !rings.childElementCount) return; // nothing to draw: no layout reads (pinch / pan call this per move)
   const r = imageRect(), st = stage.getBoundingClientRect();
   rings.replaceChildren(...pts.map((p, i) => {
     const d = el("div", { class: "focus-ring" + (p.auto ? " auto" : "") + (drag?.index === i ? " drag" : ""), text: p.auto ? t("view.ringAuto") : String(i + 1) });
@@ -732,6 +749,7 @@ function updateUndo() {
 }
 function stepHistory(p: Params | undefined) {
   if (!p) return;
+  markCheckStale();
   clearTimeout(histTimer);
   pendingLabel = "";
   params = p;
@@ -748,8 +766,8 @@ function renderHistory() {
   })));
 }
 function pushParams() {
-  checkStale = true;
-  checkBadge.hidden = true; // the count belongs to the photo as it was checked
+  markCheckStale();
+  paramsGen++;
   if (!params) return;
   scheduleCommit(nextLabel || pendingLabel || t("hist.develop"));
   nextLabel = "";
@@ -943,16 +961,9 @@ const layersPanel = createLayersPanel(dockEl, propsEl, {
   showMask: (i) => { maskIndex = i; send(baseView()); },
   develop: developEl,
   blur: blurEl,
-  photoColors: () => new Promise<string[]>((resolve) => {
-    paletteWaiters.push((s) => resolve(s.palette.map((w) => w.hex)));
-    send({ type: "palette" });
-  }),
+  photoColors: () => askEngine({ type: "palette" }, (m) => (m.type === "palette" ? m.stats.palette.map((w) => w.hex) : undefined), [] as string[]),
   notice: (text) => { badge.textContent = text; badge.classList.add("on"); },
-  brightest: () => new Promise((resolve) => {
-    const f = (m: FromWorker) => { if (m.type === "brightest") { engineListeners.delete(f); resolve({ x: m.x, y: m.y }); } };
-    engineListeners.add(f);
-    send({ type: "brightest" });
-  }),
+  brightest: () => askEngine({ type: "brightest" }, (m) => (m.type === "brightest" ? { x: m.x, y: m.y } : undefined), { x: 0.3, y: 0.2 }),
   pickMode: (on, hint) => {
     maskPicking = on;
     if (!on) { pickMark?.remove(); pickMark = undefined; }
@@ -1150,8 +1161,13 @@ const checkView = el("canvas", { class: "check-view", hidden: "" });
 const checkList = el("div", { class: "check-list" });
 checkPane.append(el("div", { class: "actions check-head" }, checkRun, checkSummary), checkView, checkList);
 checkRun.onclick = () => runCheck();
+/** The edit changed since: the check shown is of an older version (the tab re-checks, the badge hides). */
+function markCheckStale() { checkStale = true; checkBadge.hidden = true; }
+/** Bumped by every edit sent: a check result is fresh only if none happened while it ran. */
+let paramsGen = 0, checkGen = 0;
 function runCheck() {
   if (!params) { checkSummary.textContent = t("check.noPhoto"); return; }
+  checkGen = paramsGen;
   checkRun.disabled = true;
   checkSummary.textContent = t("check.running");
   send({ type: "check" });
@@ -1210,8 +1226,9 @@ function checkFixEl(it: CheckItem): HTMLElement {
     e.stopPropagation();
     if (!params) return;
     for (const c of it.fix!) {
-      if ("layer" in c) { const l = params.layers?.find((x) => x.id === c.layer); if (l) { if (c.to <= 0) l.visible = false; else l.opacity = c.to; } }
-      else setPath(params, c.path, c.to);
+      // Only over the value the fix was worked out from: a control moved since is left alone.
+      if ("layer" in c) { const l = params.layers?.find((x) => x.id === c.layer); if (l && Math.abs(l.opacity - c.from) < 1e-6) { if (c.to <= 0) l.visible = false; else l.opacity = c.to; } }
+      else if (Math.abs(getPath(params, c.path) - c.from) < 1e-6) setPath(params, c.path, c.to);
     }
     nextLabel = t("check.applied", { what: t(`check.t.${it.id}`) });
     syncControls();
@@ -1226,7 +1243,7 @@ function renderCheck() {
   checkRun.disabled = false;
   const r = checkResult;
   checkView.hidden = true;
-  if (!r) { checkList.replaceChildren(); checkSummary.textContent = params ? "" : t("check.noPhoto"); return; }
+  if (!r) { checkList.replaceChildren(); checkBadge.hidden = true; checkSummary.textContent = params ? "" : t("check.noPhoto"); return; }
   const count = (l: string) => r.items.filter((i) => i.level === l).length;
   checkSummary.textContent = t("check.summary", { bad: count("bad"), warn: count("warn"), ok: count("ok") });
   checkBadge.textContent = String(count("bad") + count("warn"));
@@ -1495,10 +1512,15 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       renderLooks();
       // After Safari evicted this tab (memory) or the GPU was reset: reopen where we were —
       // unless that very photo was being processed when the page died (would loop forever).
+      // A crash during analysis steps this device down whether or not the photo can be
+      // offered again (private mode has no stored photo; one may be opened meanwhile).
+      void crashInfo().then((c) => {
+        if (c?.analysis) { flag(() => localStorage, SAFE_ANALYSIS, true); stepDownAnalysis(); }
+      });
       void restorablePhoto().then((r) => {
+        if (crashedWhileProcessing()) consumeCrash();
         if (!r || params) return;
         if (crashedWhileProcessing()) {
-          markCompleted();
           offerSafeReopen(r.file, r.params);
           return;
         }
@@ -1596,6 +1618,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       // Not over a restored session (the user's layers, perhaps without it on purpose),
       // nor from the previous photo after another was opened.
       if (restored || opening) break;
+      markCheckStale();
       const flat = () => [{ x: 0, y: 0 }, { x: 1, y: 1 }];
       for (const p of [params, autoParams]) {
         if (!p) continue;
@@ -1616,6 +1639,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
     case "exposureCalibrated": {
       // Part of opening the photo, not an edit: the history's first step takes it too.
       if (opening) break; // the previous photo's, arriving after another was opened
+      markCheckStale();
       const before = autoParams?.exposure;
       exposureSuggestion = m.exposure;
       if (autoParams) autoParams.exposure = m.exposure;
@@ -1631,6 +1655,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       break;
     }
     case "params":
+      markCheckStale();
       params = m.params;
       pendingAuto = undefined;
       syncControls();
@@ -1662,11 +1687,12 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       break;
     case "palette":
       lookPanel.onPalette(m.stats);
-      for (const f of paletteWaiters.splice(0)) f(m.stats);
+
       break;
     case "check":
       checkResult = m;
-      checkStale = false;
+      checkStale = paramsGen !== checkGen; // edited while it ran: shown, but re-checked next time
+      queueMicrotask(() => { if (checkStale) checkBadge.hidden = true; }); // its counts are of an older version
       checkShown = undefined;
       checkSolving = true;
       renderCheck();
@@ -1679,7 +1705,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
     case "pick":
       // A changed mask is "done" when the photo shows it (a first selection is worked
       // out while rendering: seconds on a phone); otherwise now.
-      if (m.info && layersPanel.onPick(m.info)) pickAwaitsPreview = true;
+      if (m.info && layersPanel.onPick(m.info, pickFor)) pickAwaitsPreview = true;
       else pickDone();
       break;
     case "lookProfile":
