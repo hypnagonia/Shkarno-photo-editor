@@ -110,3 +110,13 @@ test("burst: series noise never falls with brightness (dark misalignment is not 
   const sig = scanNoise(ref, [other]);
   for (let i = 0; i + 1 < sig.length; i++) assert.ok(sig[i] <= sig[i + 1] + 1e-12, `bin ${i}: ${sig.map((v) => v.toFixed(4)).join(" ")}`);
 });
+
+test("burst: a frame's brightness falloff (vignetting) relative to the reference is fitted", async () => {
+  const { radialGain } = await import("../src/burst/align.ts");
+  const w = 300, h = 200, hd = Math.hypot(w, h) / 2;
+  const ref = scene(w, h);
+  // The frame: half as bright, and darker toward the corners (ref / (g·frame) = 1 + 0.3 r²).
+  const frm: Plane = { w, h, d: ref.d.map((v, i) => { const r2 = ((i % w + 0.5 - w / 2) ** 2 + (Math.floor(i / w) + 0.5 - h / 2) ** 2) / (hd * hd); return (v * 0.5) / (1 + 0.3 * r2); }) };
+  const [v1, v2] = radialGain(ref, frm, 2);
+  assert.ok(Math.abs(v1 - 0.3) < 0.03 && Math.abs(v2) < 0.05, `v1 ${v1.toFixed(3)} v2 ${v2.toFixed(3)}`);
+});

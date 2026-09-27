@@ -279,6 +279,33 @@ export function exposureRatio(ref: Plane, aligned: Plane, clipAt = 0.9): number 
   return r[r.length >> 1];
 }
 
+/**
+ * How a frame's brightness ratio to the reference changes from the centre out
+ * (vignetting differs between lenses, and between a lens's own corrections):
+ * ref / (g · frame) ≈ 1 + v1·r² + v2·r⁴, r = distance from the centre ÷ half the
+ * diagonal. Fitted on mid-tones both see unclipped; `frame` aligned to `ref` (−1 = not covered).
+ */
+export function radialGain(ref: Plane, frame: Plane, g: number, clipAt = 0.9): [number, number] {
+  const hd = Math.hypot(ref.w, ref.h) / 2;
+  // Normal equations for (v1, v2) on q − 1 = v1 r² + v2 r⁴.
+  let a11 = 0, a12 = 0, a22 = 0, b1 = 0, b2 = 0, n = 0, rMax = 0;
+  for (let y = 1; y < ref.h; y += 3) for (let x = 1; x < ref.w; x += 3) {
+    const i = y * ref.w + x, a = ref.d[i], b = frame.d[i] * g;
+    if (!(frame.d[i] > 0.01 / g) || a < 0.01 || a > clipAt || b > clipAt) continue;
+    const q = a / b - 1;
+    if (Math.abs(q) > 0.6) continue; // not the same thing (moved, misaligned)
+    const r2 = ((x + 0.5 - ref.w / 2) ** 2 + (y + 0.5 - ref.h / 2) ** 2) / (hd * hd), r4 = r2 * r2;
+    a11 += r2 * r2; a12 += r2 * r4; a22 += r4 * r4; b1 += r2 * q; b2 += r4 * q; n++;
+    if (r2 > rMax) rMax = r2;
+  }
+  // A frame that sees only the middle (a longer lens) tells nothing about the corners.
+  if (rMax < 0.7 * 0.7) return [0, 0];
+  const det = a11 * a22 - a12 * a12;
+  if (n < 200 || Math.abs(det) < 1e-12) return [0, 0];
+  const cl = (v: number) => Math.max(-0.8, Math.min(0.8, v));
+  return [cl((b1 * a22 - b2 * a12) / det), cl((a11 * b2 - a12 * b1) / det)];
+}
+
 /** Laplacian energy over the central 60 %: which frame is sharpest (the reference). */
 export function sharpness(p: Plane): number {
   let s = 0, n = 0;

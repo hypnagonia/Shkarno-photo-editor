@@ -19,12 +19,13 @@ import { Gpu, Uniforms } from "../gpu/gpu.ts";
 import burstWgsl from "../gpu/shaders/burst.wgsl?raw";
 import { halvesToFloats } from "../gpu/half.ts";
 import { decodeFile } from "../decode/decode.ts";
+import { isPhone } from "../device.ts";
 import type { DecodedImage } from "../decode/types.ts";
 import { develop, type WorkingImage } from "../raw/develop.ts";
 import { downsample } from "../refine/refine.ts";
 import { denoiseGPU } from "../restore/denoise.ts";
 import { measureBlocks, noiseProfile } from "../analysis/analysis.ts";
-import { alignTiles, coveredTiles, searchScale, exposureRatio, fitGlobal, flowAt, half, modelAt, pyramid, regularise, resamplePlane, rescale, scaleOf, scanNoise, sharpness, texturedTiles, warp, type Affine, type Flow, type Plane } from "./align.ts";
+import { alignTiles, coveredTiles, radialGain, searchScale, exposureRatio, fitGlobal, flowAt, half, modelAt, pyramid, regularise, resamplePlane, rescale, scaleOf, scanNoise, sharpness, texturedTiles, warp, type Affine, type Flow, type Plane } from "./align.ts";
 
 export type BurstMode = "clean";
 
@@ -77,9 +78,19 @@ interface Aligned {
   lens?: { aff: Affine; gc: [number, number, number]; weight: number };
   /** Less weight for a frame shaken more than the reference (its detail is softer). */
   sharpWeight: number;
+  /** Its brightness falloff relative to the reference (vignetting): 1 + v[0]·r² + v[1]·r⁴. */
+  vig: [number, number];
 }
 
+/**
+ * Before the next frame's decode: the previous RAW decoder's worker (hundreds of MB of
+ * heap for 48 MP) is terminated asynchronously, and decoding at once let two heaps
+ * overlap — the phone's page memory peaked 100–200 MB higher, run to run.
+ */
+const settle = () => new Promise((r) => setTimeout(r, isPhone() ? 150 : 0));
+
 async function decodeDev(gpu: Gpu, file: File, factor: number | ((w: number, h: number) => number)): Promise<{ decoded: DecodedImage; work: WorkingImage }> {
+  await settle();
   const decoded = await decodeFile(new Uint8Array(await file.arrayBuffer()), file.name, file.type);
   try {
     const f = typeof factor === "number" ? factor : factor(decoded.source.width, decoded.source.height);
@@ -175,6 +186,10 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
     const flow = regularise(raw, model, rw, rh, mask, sameLens ? 2 : 6);
     const wy = warp(base, flow);
     g = exposureRatio(ref.y, wy);
+    // Far from the reference's exposure a frame is mostly clipped or mostly noise, and its
+    // tone no longer matches: it would add patches, not detail.
+    if (Math.abs(Math.log2(g)) > 2.5) { opt.log(`series: ${s.file.name} left out (exposure ${Math.log2(1 / g) >= 0 ? "+" : ""}${Math.log2(1 / g).toFixed(1)} EV from the reference)`); continue; }
+    const vig = radialGain(ref.y, wy, g);
     const shift = Math.hypot(model.tx, model.ty) * (W / rw);
     const rot = (Math.atan2(model.b, model.a) * 180) / Math.PI;
     let lens: Aligned["lens"];
@@ -205,8 +220,10 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
     // A frame softer than the reference (hand shake): its share falls with the square of that.
     const sharpWeight = Math.min(1, Math.max(0.1, (s.sharp / Math.max(1e-12, ref.sharp)) ** 2));
     opt.log(`series: ${s.file.name} sharpness ${(s.sharp / Math.max(1e-12, ref.sharp)).toFixed(2)} of the reference → weight ${sharpWeight.toFixed(2)}`);
-    aligned.push({ scan: s, flow: init, g, lens, sharpWeight });
-    warpedY.push({ ...wy, d: wy.d.map((v) => (v < 0 ? -1 : v * g)) });
+    if (Math.abs(vig[0]) + Math.abs(vig[1]) > 0.02) opt.log(`series: ${s.file.name} brightness falloff to the reference ${vig.map((v) => v.toFixed(3)).join(" / ")} (r², r⁴)`);
+    aligned.push({ scan: s, flow: init, g, lens, sharpWeight, vig });
+    const hd2 = (rw * rw + rh * rh) / 4;
+    warpedY.push({ ...wy, d: wy.d.map((v, i) => { if (v < 0) return -1; const r2 = ((i % rw + 0.5 - rw / 2) ** 2 + (Math.floor(i / rw) + 0.5 - rh / 2) ** 2) / hd2; return v * g * (1 + vig[0] * r2 + vig[1] * r2 * r2); }) });
   }
   const sig = scanNoise(ref.y, warpedY);
   const midSig = sig[5];
@@ -223,12 +240,12 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
   const scanK = W / rw;
   // The weight a pixel gathers where every frame agrees (the shader's per-frame weight, summed):
   // the ghost mix compares what a pixel got against this, not against the frame count.
-  const frameWeight = (a: Aligned) => Math.min(4, Math.max(0.25, 1 / (a.g * a.g))) * (a.lens?.weight ?? 1) * a.sharpWeight;
-  const fullWeight = 1 + aligned.reduce((t, a) => t + frameWeight(a), 0);
+  const frameWeight = (a: Aligned) => Math.min(2, Math.max(0.25, 1 / (a.g * a.g))) * (a.lens?.weight ?? 1) * a.sharpWeight;
+  let fullWeight = 1 + aligned.reduce((t, a) => t + frameWeight(a), 0);
   const uni = (g: number, mode = 0, a?: Aligned) => {
     const L = a?.lens;
     return new Uniforms(28).u32(W, H, tw, th).f32(g, scanK / 3, fullWeight).u32(mode).f32(...sig)
-      .f32(L?.aff.a ?? 1, L?.aff.b ?? 0, L?.aff.tx ?? 0, L?.aff.ty ?? 0).f32(a?.scan.W ?? W, a?.scan.H ?? H, 0, 0)
+      .f32(L?.aff.a ?? 1, L?.aff.b ?? 0, L?.aff.tx ?? 0, L?.aff.ty ?? 0).f32(a?.scan.W ?? W, a?.scan.H ?? H, a?.vig[0] ?? 0, a?.vig[1] ?? 0)
       .f32(...(L?.gc ?? [1, 1, 1]), (L?.weight ?? 1) * (a?.sharpWeight ?? 1)).bytes();
   };
 
@@ -237,7 +254,7 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
   opt.track(() => R.decoded.close());
   const acc = gpu.buf("burst.acc", W * H * 8, GPUBufferUsage.STORAGE);
   const wbuf = gpu.buf("burst.weights", Math.ceil(W / 2) * H * 4, GPUBufferUsage.STORAGE);
-  const flowBuf = gpu.buf("burst.flow", tw * th * 16, GPUBufferUsage.STORAGE);
+  const flowBuf = gpu.buf("burst.flow", tw * th * 16, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC); // (read back: does the frame fit?)
   const initBuf = gpu.buf("burst.init", tw * th * 8, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   const refL = gpu.tex("burst.refLuma", W, H, "r32float");
   const frmL = gpu.tex("burst.frameLuma", W, H, "r32float");
@@ -259,6 +276,7 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
     const log = [...R.work.log];
     gpu.release(R.work.tex);
 
+    let dropped = 0;
     for (let k = 0; k < aligned.length; k++) {
       const a = aligned[k];
       opt.progress("series merge", `${k + 2}/${aligned.length + 1}`, 0.35 + ((k + 1) / (aligned.length + 1)) * 0.6);
@@ -285,10 +303,34 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
         }
         gpu.device.queue.writeBuffer(initBuf, 0, init);
         const fv = frame.createView();
-        await gpu.run("burst.frame", (enc, temp) => {
+        await gpu.run("burst.align", (enc, temp) => {
           const u = gpu.uniform(uni(a.g, 0, a)); temp.push(u);
           gpu.dispatch(enc, pipe("luma"), [u, fv, frmL.createView()], Math.ceil(W / 16), Math.ceil(H / 16));
           gpu.dispatch(enc, pipe("align"), [u, undefined, undefined, refL.createView(), frmL.createView(), initBuf, flowBuf], tw, th);
+        }, true);
+        // Does the frame fit enough of the scene once aligned? Pieces whose residual is far
+        // beyond noise (parallax, distortion, motion) are left out one by one in the shader;
+        // a frame where most do not fit is left out whole (it would only add ghosts).
+        const fl = new Float32Array(await gpu.readBuffer(flowBuf, tw * th * 16));
+        let fit = 0, seen = 0;
+        for (let ty = 0; ty < th; ty++) for (let tx = 0; tx < tw; tx++) {
+          const sx = Math.min(rw - 1, Math.floor(((tx + 0.5) * TILE) / scanK)), sy = Math.min(rh - 1, Math.floor(((ty + 0.5) * TILE) / scanK));
+          const Y = Math.max(ref.y.d[sy * rw + sx], 1e-4);
+          const b = Math.min(7, Math.max(0, Math.floor(Math.sqrt(Y) * 8)));
+          const sf = sig[b] * scanK;
+          const expect = Math.max((sf * sf * (1 + a.g * a.g)) / (4 * Y), 1e-9);
+          const e = fl[(ty * tw + tx) * 4 + 2];
+          if (!(e >= 0)) continue;
+          // Only where the frame sees the scene (another lens covers part of it).
+          if (a.lens) { const cx = ((tx + 0.5) * TILE - W / 2), cy = ((ty + 0.5) * TILE - H / 2); const q = [a.scan.W / 2 + a.lens.aff.a * cx - a.lens.aff.b * cy + a.lens.aff.tx, a.scan.H / 2 + a.lens.aff.b * cx + a.lens.aff.a * cy + a.lens.aff.ty]; if (q[0] < 0 || q[1] < 0 || q[0] > a.scan.W || q[1] > a.scan.H) continue; }
+          seen++;
+          if (e / expect < 16) fit++;
+        }
+        const share = seen ? fit / seen : 0;
+        opt.log(`series: ${a.scan.file.name} fits in ${Math.round(share * 100)}% of the pieces it covers`);
+        if (share < 0.3) { opt.log(`series: ${a.scan.file.name} left out (does not fit the reference: parallax, distortion or motion)`); dropped++; fullWeight -= frameWeight(a); continue; }
+        await gpu.run("burst.frame", (enc, temp) => {
+          const u = gpu.uniform(uni(a.g, 0, a)); temp.push(u);
           gpu.dispatch(enc, pipe("weights"), [u, fv, undefined, undefined, undefined, undefined, flowBuf, sampler, acc, wbuf], Math.ceil(W / 16), Math.ceil(H / 8));
           gpu.dispatch(enc, pipe("accumulate"), [u, fv, undefined, undefined, undefined, undefined, flowBuf, undefined, acc, wbuf], Math.ceil(W / 8), Math.ceil(H / 8)); // (bicubic by texel loads: no sampler)
         }, true);
@@ -325,7 +367,7 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
       } finally { gpu.release(dn, refTex); }
     }
     gpu.release(acc);
-    const used = aligned.length + 1;
+    const used = aligned.length + 1 - dropped;
     // Expected noise of the merge: one frame's ÷ √(frames), where they agreed.
     const merged = midSig / Math.sqrt(used);
     log.push(`series merge (${opt.mode}): ${used} frames in ${Math.round(performance.now() - t0)} ms; noise σ ≈ ${(midSig * 1000).toFixed(2)} → ${(merged * 1000).toFixed(2)} ×1e-3`);

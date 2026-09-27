@@ -26,7 +26,7 @@ struct U {
   mode: u32,     // finalize: 1 = mix the denoised image into ghost areas
   sig0: vec4<f32>, sig1: vec4<f32>, // noise σ (linear) per √Y bin, 8 bins
   aff: vec4<f32>,  // another lens: reference → frame pixels, q − c_f = [a −b; b a](p − c_r) + t
-  fsize: vec4<f32>, // that frame's size
+  fsize: vec4<f32>, // that frame's size; zw: its brightness falloff to the reference (1 + z·r² + w·r⁴)
   gc: vec4<f32>,   // its colour gains (rgb, another lens) and weight (a: lens detail × sharpness)
 }
 @group(0) @binding(0) var<uniform> u: U;
@@ -46,11 +46,18 @@ const T: i32 = 16;      // tile
 const S: i32 = 3;       // search ±2, plus 1 for the gradients of the sub-pixel step
 const WIN: i32 = 22;    // T + 2·S
 
+/** This frame's gain to the reference's brightness at pixel p: exposure × vignetting difference. */
+fn gain_at(p: vec2<f32>) -> f32 {
+  let d = (p - vec2<f32>(f32(u.w), f32(u.h)) * 0.5) / (0.5 * length(vec2<f32>(f32(u.w), f32(u.h))));
+  let r2 = dot(d, d);
+  return u.g * (1.0 + u.fsize.z * r2 + u.fsize.w * r2 * r2);
+}
+
 @compute @workgroup_size(16, 16)
 fn luma(@builtin(global_invocation_id) id: vec3<u32>) {
   if (id.x >= u.w || id.y >= u.h) { return; }
   let c = textureLoad(frame, vec2<i32>(id.xy), 0).rgb;
-  textureStore(lum_out, vec2<i32>(id.xy), vec4<f32>(sqrt(max(0.0, u.g * luma2020(c))), 0.0, 0.0, 1.0));
+  textureStore(lum_out, vec2<i32>(id.xy), vec4<f32>(sqrt(max(0.0, gain_at(vec2<f32>(id.xy) + 0.5) * luma2020(c))), 0.0, 0.0, 1.0));
 }
 
 var<workgroup> rt: array<f32, 256>;
@@ -172,9 +179,16 @@ fn weight_at(px: i32, py: i32) -> f32 {
   let p = vec2<f32>(f32(px) + 0.5, f32(py) + 0.5);
   let f = flow_at(p);
   let x = frame_at(p + f);
-  if (x.a > 0.0) { return 0.0; } // clipped in this frame
+  if (x.a > 0.0) { return 0.0; } // clipped in this frame (or not covered by another lens's view)
+  // Another lens's frame fades out over its last pixels (alpha −1 at its edge … 0 inside): no seam.
+  let edge = 1.0 + min(x.a, 0.0);
+  // A brighter frame (used for its cleaner shadows) is not trusted near its own clipping:
+  // just below it the sensor and the raw pipeline are no longer linear.
+  let hi = max(x.r, max(x.g, x.b));
+  let nearClip = select(1.0, 1.0 - smoothstep(0.6, 0.95, hi), u.g < 0.9);
+  let g = gain_at(p);
   let m = acc_get(px, py);
-  if (m.w < 0.0) { return 1.0; } // clipped in every frame so far: anything unclipped is better
+  if (m.w < 0.0) { return edge; } // clipped in every frame so far: anything unclipped is better
   // 3×3 means of the frame (aligned) and of the running mean.
   var xb = vec3<f32>(0.0); var mb = vec3<f32>(0.0);
   for (var j = -1; j <= 1; j++) {
@@ -183,15 +197,23 @@ fn weight_at(px: i32, py: i32) -> f32 {
       mb += acc_get(px + i, py + j).rgb;
     }
   }
-  xb = xb * (u.g / 9.0); mb = mb / 9.0;
+  xb = xb * (g / 9.0); mb = mb / 9.0;
   let s = sigma(luma2020(mb)) * u.sscale;
-  let s2 = max(s * s * (u.g * u.g + 0.5), 1e-10);
+  let s2 = max(s * s * (g * g + 0.5), 1e-10);
   let d = xb - mb;
   let t = dot(d, d) / 3.0 / s2;
   // Within ~1.7σ: full weight; beyond, falling fast (a moving thing, a misalignment).
   let w = exp(-max(0.0, t - 3.0) * 0.5);
+  // The 16 px piece around: does it fit at all after alignment? Its alignment residual
+  // (√-luma, mean square) against what noise alone leaves; pieces that do not fit
+  // (parallax, lens distortion, something moved) add nothing, even where one pixel agrees.
+  let tile = min(u32(p.y) / 16u, u.th - 1u) * u.tw + min(u32(p.x) / 16u, u.tw - 1u);
+  let Y = max(luma2020(mb), 1e-4);
+  let sf = s * 3.0; // one full-size pixel's σ (s is a 3×3 mean's)
+  let expect = max(sf * sf * (1.0 + g * g) / (4.0 * Y), 1e-9);
+  let fits = 1.0 - smoothstep(4.0, 16.0, flow[tile].z / expect);
   // A frame scaled up (darker) carries more noise; a wider lens's or a shaken frame, less detail.
-  return w * clamp(1.0 / (u.g * u.g), 0.25, 4.0) * u.gc.w;
+  return w * fits * edge * nearClip * clamp(1.0 / (g * g), 0.25, 2.0) * u.gc.w;
 }
 
 @compute @workgroup_size(8, 8)
@@ -210,7 +232,7 @@ fn accumulate(@builtin(global_invocation_id) id: vec3<u32>) {
   let w = select(ww.x, ww.y, (id.x & 1u) == 1u);
   if (w < 1e-3) { return; }
   let p = vec2<f32>(vec2<u32>(id.xy)) + 0.5;
-  let x = frame_sharp(p + flow_at(p)) * u.g;
+  let x = frame_sharp(p + flow_at(p)) * gain_at(p);
   let i = id.y * u.w + id.x;
   let v = acc[i];
   var m = vec4<f32>(unpack2x16float(v.x), unpack2x16float(v.y));
@@ -233,7 +255,10 @@ fn resample(@builtin(global_invocation_id) id: vec3<u32>) {
     for (var j = -1; j <= 1; j++) { for (var i = -1; i <= 1; i++) { c += textureSampleLevel(frame, samp, (q + vec2<f32>(f32(i), f32(j)) * st) / u.fsize.xy, 0.0); } }
     c = c / 9.0;
   } else { c = textureSampleLevel(frame, samp, q / u.fsize.xy, 0.0); }
-  textureStore(out, vec2<i32>(id.xy), vec4<f32>(c.rgb * u.gc.rgb, c.a));
+  // Alpha: clipped as before; otherwise −(how close to the frame's edge), fading over 64 reference pixels.
+  let edge = min(min(q.x, q.y), min(u.fsize.x - q.x, u.fsize.y - q.y)) / max(sc, 1e-3);
+  let a = select(-(1.0 - smoothstep(0.0, 64.0, edge)), c.a, c.a > 0.0);
+  textureStore(out, vec2<i32>(id.xy), vec4<f32>(c.rgb * u.gc.rgb, a));
 }
 
 @compute @workgroup_size(8, 8)
@@ -252,6 +277,18 @@ fn sigma_enc(e: f32) -> f32 {
 }
 fn enc_y(c: vec3<f32>) -> f32 { return srgb_oetf1(clamp(u.g * luma2020(c), 0.0, 1.0)); }
 
+/**
+ * The merge at q, with ghost areas (few frames agreed: something moved) mixed toward the
+ * denoised image as much as the pixel's weight falls short of half of what full agreement
+ * gives. Where most frames agreed, the merge itself is the noise reduction.
+ */
+fn ghost_mixed(q: vec2<i32>) -> vec3<f32> {
+  let m = acc_get(q.x, q.y);
+  let want = max(0.5 * u.n, 1.0 + 1e-3);
+  let a = clamp((want - abs(m.w)) / (want - 1.0), 0.0, 1.0);
+  return mix(m.rgb, textureLoad(dn, q, 0).rgb, a);
+}
+
 @compute @workgroup_size(8, 8)
 fn finalize(@builtin(global_invocation_id) id: vec3<u32>) {
   if (id.x >= u.w || id.y >= u.h) { return; }
@@ -259,27 +296,23 @@ fn finalize(@builtin(global_invocation_id) id: vec3<u32>) {
   let m = acc_get(p.x, p.y);
   var c = m.rgb;
   if (u.mode == 1u) {
-    // Ghost areas (few frames agreed: something moved): toward the denoised image, as much
-    // as the pixel's weight falls short of half of what full agreement gives. Where most
-    // frames agreed, the merge itself is the noise reduction — no denoiser blur there.
-    let want = max(0.5 * u.n, 1.0 + 1e-3);
-    let a = clamp((want - abs(m.w)) / (want - 1.0), 0.0, 1.0);
-    c = mix(c, textureLoad(dn, p, 0).rgb, a);
+    c = ghost_mixed(p);
     // Detail rescue: fine texture that hand-held frames could not align to a fraction of a
-    // pixel is softened by the mean. Where the merge's fine detail (pixel − 3×3 mean)
-    // differs from the reference's by more than noise explains, the reference is kept.
+    // pixel is softened by the mean (and moving things by the denoiser). Where the result's
+    // fine detail (pixel − 3×3 mean) differs from the reference's by more than noise
+    // explains, the reference is kept.
     let mx = vec2<i32>(i32(u.w) - 1, i32(u.h) - 1);
-    var rb = 0.0; var mb = 0.0;
+    var rb = 0.0; var cb = 0.0;
     for (var j = -1; j <= 1; j++) {
       for (var i = -1; i <= 1; i++) {
         let q = clamp(p + vec2<i32>(i, j), vec2<i32>(0), mx);
         rb += enc_y(textureLoad(frame, q, 0).rgb);
-        mb += enc_y(acc_get(q.x, q.y).rgb);
+        cb += enc_y(ghost_mixed(q));
       }
     }
     let rc = textureLoad(frame, p, 0).rgb;
     let er = enc_y(rc);
-    let d = abs((er - rb / 9.0) - (enc_y(m.rgb) - mb / 9.0));
+    let d = abs((er - rb / 9.0) - (enc_y(c) - cb / 9.0));
     let s = max(sigma_enc(er), 1e-4);
     let keep = smoothstep(1.0 * s, 2.5 * s, d);
     c = mix(c, rc, keep);

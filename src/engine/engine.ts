@@ -127,6 +127,8 @@ interface SeriesState {
   /** The reference shot alone, developed on first request. */
   single?: { tex: GPUTexture; denoised: GPUTexture };
   showing: "merged" | "single";
+  /** Phones: the merge's denoised copy was dropped while the single shot shows (made again on return). */
+  mergedDenoise?: boolean;
 }
 
 interface Selections {
@@ -832,30 +834,55 @@ export class Engine {
   async seriesView(single: boolean) {
     const s = this.s, r = s?.series;
     if (!s || !r || (r.showing === "single") === single) return;
-    if (single && !r.single) {
-      this.progress("series single");
-      const { developSingle } = await import("../burst/burst.ts");
-      const w = await developSingle(this.gpu, r.files[r.refIndex], r.factor);
-      let dn = w.tex;
-      try {
-        if (this.s === s && s.decision.plan.denoise) {
-          const noise = noiseProfile(await measureBlocks(this.gpu, w.tex, w.width, w.height, s.gain, 0.02));
-          dn = await denoiseGPU(this.gpu, w.tex, w.width, w.height, s.gain, noise);
-          const m = noise.mid / Math.max(1e-6, s.report.noise.mid);
-          this.log(`series A/B: one shot noise ${(noise.mid * 255).toFixed(2)}/255 vs merge ${(s.report.noise.mid * 255).toFixed(2)}/255 (×${m.toFixed(2)})`);
-        }
-      } catch (e) { this.gpu.release(w.tex, dn); throw e; }
-      if (this.s !== s) { this.gpu.release(w.tex, dn); return; }
-      r.single = { tex: w.tex, denoised: dn };
-    }
+    // Phones keep two full-size images at a time, not four: the image not shown gives up
+    // its denoised copy (the merge; made again in milliseconds) or goes (the single shot).
+    const phone = isMobile();
+    const remakeMergedDenoise = async () => {
+      if (!r.mergedDenoise) return;
+      r.merged = { tex: r.merged.tex, denoised: await denoiseGPU(this.gpu, r.merged.tex, s.work.width, s.work.height, s.gain, s.report.noise) };
+      r.mergedDenoise = false;
+    };
     if (r.showing === "merged") r.merged = { tex: s.work.tex, denoised: s.denoised };
+    if (single) {
+      if (phone && r.merged.denoised !== r.merged.tex) {
+        this.releaseProxy(s); // (a same-size proxy aliases the copy)
+        this.gpu.release(r.merged.denoised);
+        r.merged = { tex: r.merged.tex, denoised: r.merged.tex };
+        s.denoised = s.work.tex;
+        r.mergedDenoise = true;
+      }
+      if (!r.single) {
+        try {
+          this.progress("series single");
+          const { developSingle } = await import("../burst/burst.ts");
+          const w = await developSingle(this.gpu, r.files[r.refIndex], r.factor);
+          let dn = w.tex;
+          try {
+            // The same processing as the merge (the decision's denoise), only one frame.
+            if (this.s === s && s.decision.plan.denoise) {
+              const noise = noiseProfile(await measureBlocks(this.gpu, w.tex, w.width, w.height, s.gain, 0.02));
+              dn = await denoiseGPU(this.gpu, w.tex, w.width, w.height, s.gain, noise);
+              this.log(`series A/B: one shot noise ${(noise.mid * 255).toFixed(2)}/255 vs merge ${(s.report.noise.mid * 255).toFixed(2)}/255`);
+            }
+          } catch (e) { this.gpu.release(w.tex, dn); throw e; }
+          if (this.s !== s) { this.gpu.release(w.tex, dn); return; }
+          r.single = { tex: w.tex, denoised: dn };
+        } catch (e) {
+          // Stay on the merge, whole again.
+          await remakeMergedDenoise();
+          s.denoised = r.merged.denoised;
+          await this.makeProxy();
+          throw e;
+        }
+      }
+    } else {
+      if (phone && r.single) { const o = r.single; r.single = undefined; this.releaseProxy(s); if (o.denoised !== o.tex) this.gpu.release(o.denoised); this.gpu.release(o.tex); }
+      await remakeMergedDenoise();
+    }
     const use = single ? r.single! : r.merged;
     s.work = { ...s.work, tex: use.tex };
     s.denoised = use.denoised;
     r.showing = single ? "single" : "merged";
-    // Phones: the single shot is not kept while the merge shows (two more full-size
-    // textures for the whole session); it is developed again on the next A/B.
-    if (!single && r.single && isMobile()) { const o = r.single; r.single = undefined; if (o.denoised !== o.tex) this.gpu.release(o.denoised); this.gpu.release(o.tex); }
     this.dropThumb();
     await this.makeProxy();
     this.postSeries();
