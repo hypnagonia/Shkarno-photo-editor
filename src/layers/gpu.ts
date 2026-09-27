@@ -10,6 +10,7 @@
  *         [32…79] extra mask parts, 12 floats each (kind 0 = none):
  *                 kind, region, band, op | values 0–3 | value 4, invert, feather, _
  * Mask values by kind — luminance: low, high, soft; color: L, a, b, tolerance; depth: low, high, soft; object: region within depth low, high, soft;
+ *   shape: angle (rad), size, x, y, softness (the style in the region field: 0 linear, 1 radial);
  *   select: layer of the selection texture (−1 = not ready: nothing).
  */
 import { GROUPS } from "../neural/scene.ts";
@@ -35,17 +36,21 @@ function cachedRow(key: string, make: () => Float32Array): Float32Array {
   return r;
 }
 export const ATLAS_W = CURVE_LUT_SIZE; // 1024
-const MASK_KIND: Record<MaskKind, number> = { all: 0, region: 1, distance: 2, cell: 3, luminance: 4, color: 5, depth: 6, object: 7, select: 8 };
+const MASK_KIND: Record<MaskKind, number> = { all: 0, region: 1, distance: 2, cell: 3, luminance: 4, color: 5, depth: 6, object: 7, select: 8, shape: 9 };
 const MASK_OP: Record<MaskOp, number> = { add: 0, subtract: 1, intersect: 2 };
 
 /** The five numbers a mask kind reads (see the record layout). `slotOf`: a selection's layer in the selection texture. */
 function maskValues(m: MaskShape, slotOf?: (m: MaskShape) => number): number[] {
   if (m.kind === "select") return [slotOf?.(m) ?? -1, 0, 0, 0, 0];
+  if (m.kind === "shape") { const g = m.shape ?? defaultShape("linear"); return [(g.angle * Math.PI) / 180, g.scale, g.x, g.y, g.soft]; }
   if (m.kind === "color") return [...(m.color ?? [0.5, 0, 0]), m.tol ?? 0.08, 0];
   if (m.kind === "depth" || m.kind === "object") return [...(m.depth ?? [0, 0.3, 0.05]), 0, 0];
   return [m.lum?.[0] ?? 0, m.lum?.[1] ?? 1, m.lum?.[2] ?? 0.08, 0, 0];
 }
-const regionIndex = (m: MaskShape) => (m.region === "skin" ? 11 : m.region ? GROUPS.indexOf(m.region) : 0);
+const regionIndex = (m: MaskShape) => (m.kind === "shape" ? (m.shape?.style === "radial" ? 1 : 0) : m.region === "skin" ? 11 : m.region ? GROUPS.indexOf(m.region) : 0);
+/** A new shape mask: a graduated filter over the top half, or a spotlight in the middle. */
+export const defaultShape = (style: "linear" | "radial"): NonNullable<MaskShape["shape"]> =>
+  style === "linear" ? { style, angle: 90, scale: 1, x: 0.5, y: 0.5, soft: 0.6 } : { style, angle: 0, scale: 0.6, x: 0.5, y: 0.5, soft: 0.5 };
 
 export interface PackedLayers { records: Float32Array; count: number; atlas: Float32Array; rows: number }
 

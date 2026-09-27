@@ -19,7 +19,7 @@ export type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "softLigh
   | "hue" | "saturation" | "color" | "luminosity";
 export const BLEND_MODES: BlendMode[] = ["normal", "multiply", "screen", "overlay", "softLight", "hardLight", "darken", "lighten", "hue", "saturation", "color", "luminosity"];
 
-export type MaskKind = "all" | "region" | "distance" | "cell" | "luminance" | "color" | "depth" | "object" | "select";
+export type MaskKind = "all" | "region" | "distance" | "cell" | "luminance" | "color" | "depth" | "object" | "select" | "shape";
 
 /** A tap in a selection (tap-to-select, src/neural/sam.ts): x, y (0…1 of the photo) and 1 = part of it, 0 = not. */
 export type SelectPoint = [number, number, 0 | 1];
@@ -39,6 +39,13 @@ export interface MaskShape {
   tol?: number;
   /** Distance range (0 = nearest … 1 = farthest): low, high, softness. "object" = `region` within it. */
   depth?: [number, number, number];
+  /**
+   * Shape (a graduated or radial filter), laid out as the Gradient Fill layer:
+   * linear = on at the start side of a line at `angle` (degrees, 90 = from the top)
+   * through (x, y), fading over `soft`; radial = on inside a circle of `scale` around
+   * (x, y) (1 = reaching the picture's corners), fading out over `soft`.
+   */
+  shape?: { style: "linear" | "radial"; angle: number; scale: number; x: number; y: number; soft: number };
   /** Selection: the tap that made it, and which of SAM's readings (0 whole, 1 part, 2 detail; none = SAM's most confident). */
   points?: SelectPoint[];
   level?: 0 | 1 | 2;

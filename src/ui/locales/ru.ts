@@ -201,6 +201,8 @@ export const ru: Dict = {
   "mask.feather": "Растушёвка",
   "mask.density": "Плотность",
   "mask.show": "Показать маску на фото",
+  "mask.shape": "Фигура",
+  "mask.shapes": "Фигуры:",
   "mask.regions": "Области:",
   "mask.tapHint": "Нажмите, чтобы выделить · ещё раз — убрать",
   "mask.selecting": "Выделение…",

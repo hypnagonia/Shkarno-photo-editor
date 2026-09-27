@@ -21,7 +21,7 @@ import { createToneCurves } from "../toneCurves.ts";
 import { t, tOr } from "../i18n.ts";
 import { icon } from "./icons.ts";
 import { createGradientEditor } from "./gradientEditor.ts";
-import { liveLayers } from "../../layers/gpu.ts";
+import { defaultShape, liveLayers } from "../../layers/gpu.ts";
 import { el } from "../dom.ts";
 
 type Ctx = {
@@ -348,7 +348,7 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
   function addPiece(l: Layer, shape: Partial<MaskShape>, op: MaskOp): boolean {
     const m = l.mask;
     const parts = (m.parts ??= []);
-    const clean = { invert: false, feather: 1, points: undefined, color: undefined, depth: undefined, lum: undefined, region: undefined, band: undefined, level: undefined, tol: undefined };
+    const clean = { invert: false, feather: 1, points: undefined, color: undefined, depth: undefined, lum: undefined, region: undefined, band: undefined, level: undefined, tol: undefined, shape: undefined };
     if (m.kind === "all" && op === "add") { l.mask = { ...m, ...clean, ...shape } as SmartMask; open = "main"; return true; }
     if (parts.length >= MAX_MASK_PARTS) return false;
     parts.push({ ...clean, ...shape, op } as MaskPart);
@@ -404,6 +404,7 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
       case "distance": return [document.createTextNode(t(`band.${sh.band ?? "near"}`))];
       case "cell": return [document.createTextNode(`${reg(sh.region)} · ${t(`band.${sh.band ?? "near"}`).toLowerCase()}`)];
       case "luminance": return [document.createTextNode(`${t("mask.luminance")} ${pct100(sh.lum?.[0] ?? 0)}–${pct100(sh.lum?.[1] ?? 1)}`)];
+      case "shape": return [document.createTextNode(sh.shape?.style === "radial" ? t("grad.radial") : `${t("grad.linear")} ${Math.round(sh.shape?.angle ?? 90)}°`)];
       default: return [document.createTextNode(t("mask.all"))];
     }
   }
@@ -440,6 +441,18 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
       // How much of what was tapped: SAM's own best reading, or whole / part / detail (a person / their clothes / a piece).
       out.push(chips<"auto" | "0" | "1" | "2">(([undefined, 0, 1, 2] as const).map((lv) => ({ id: lv === undefined ? "auto" : (String(lv) as "0"), label: levelName(lv) })),
         sh.level === undefined ? "auto" : (String(sh.level) as "0"), (v) => set({ level: v === "auto" ? undefined : (+v as 0 | 1 | 2) })));
+    }
+    if (sh.kind === "shape") {
+      // Laid out as the Gradient Fill layer: the same controls, the same meaning.
+      const g = (sh.shape ??= defaultShape("linear"));
+      const pctv = (v: number) => `${Math.round(v * 100)}%`;
+      out.push(chips<"linear" | "radial">([{ id: "linear", label: t("grad.linear") }, { id: "radial", label: t("grad.radial") }], g.style,
+        (st) => set({ shape: st === g.style ? g : { ...defaultShape(st), x: g.x, y: g.y } })));
+      if (g.style === "linear") out.push(slider(t("grad.angle"), -180, 180, 1, () => g.angle, (v) => (g.angle = v), (v) => `${Math.round(v)}°`, 90));
+      out.push(slider(t("grad.scale"), 0.05, 2, 0.01, () => g.scale, (v) => (g.scale = v), pctv, g.style === "radial" ? 0.6 : 1));
+      out.push(slider(t("grad.x"), 0, 1, 0.01, () => g.x, (v) => (g.x = v), pctv, 0.5));
+      out.push(slider(t("grad.y"), 0, 1, 0.01, () => g.y, (v) => (g.y = v), pctv, 0.5));
+      out.push(slider(t("mask.soft"), 0, 1, 0.01, () => g.soft, (v) => (g.soft = v), pctv, g.style === "radial" ? 0.5 : 0.6));
     }
     if (sh.kind === "color") out.push(slider(t("mask.tol"), 0.01, 0.3, 0.005, () => sh.tol ?? 0.08, (v) => (sh.tol = v), pct100, 0.08));
     if (sh.kind !== "all") {
@@ -486,6 +499,13 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
         b.classList.toggle("on", findRegion(r) !== undefined);
       }
     }
+
+    // Shapes: a graduated (linear) or radial filter as a piece of the mask, one tap each.
+    out.push(el("div", { class: "mask-regions" },
+      el("span", { class: "muted", text: t("mask.shapes") }),
+      chips<"linear" | "radial">([{ id: "linear", label: t("grad.linear") }, { id: "radial", label: t("grad.radial") }], undefined, (st) => {
+        if (addPiece(l, { kind: "shape", shape: defaultShape(st) }, "add")) changed(); else ctx.notice?.(t("mask.full"));
+      })));
 
     // The pieces.
     type Key = "main" | number;

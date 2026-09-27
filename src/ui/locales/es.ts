@@ -201,6 +201,8 @@ export const es: Dict = {
   "mask.feather": "Borde suave",
   "mask.density": "Densidad",
   "mask.show": "Mostrar máscara en la foto",
+  "mask.shape": "Forma",
+  "mask.shapes": "Formas:",
   "mask.regions": "Regiones:",
   "mask.tapHint": "Toca para seleccionar · otra vez para quitar",
   "mask.selecting": "Seleccionando…",

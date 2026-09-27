@@ -206,6 +206,8 @@ export const en = {
   "mask.feather": "Soft edge",
   "mask.density": "Density",
   "mask.show": "Show mask on the photo",
+  "mask.shape": "Shape",
+  "mask.shapes": "Shapes:",
   "mask.regions": "Regions:",
   "mask.tapHint": "Tap to select · tap it again to remove",
   "mask.selecting": "Selecting…",

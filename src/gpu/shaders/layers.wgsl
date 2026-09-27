@@ -86,7 +86,8 @@ var<private> lay_blur: f32 = 0.0;
 /** OkLab of the colour before the layers, for colour masks (computed once, on first use). */
 var<private> lay_lab: vec3<f32>;
 var<private> lay_lab_ok: bool = false;
-fn layer_setup(g: array<f32, 12>, dist: f32) { lay_g = g; lay_bw = band_w(dist); lay_dist = dist; lay_lab_ok = false; }
+var<private> lay_aspect: f32 = 1.0;
+fn layer_setup(g: array<f32, 12>, dist: f32, aspect: f32) { lay_g = g; lay_bw = band_w(dist); lay_dist = dist; lay_lab_ok = false; lay_aspect = aspect; }
 
 /** A range [lo, hi] with soft edges; a range starting at 0 or ending at 1 covers that end fully. */
 fn soft_range(x: f32, lo: f32, hi: f32, soft: f32) -> f32 {
@@ -97,7 +98,26 @@ fn soft_range(x: f32, lo: f32, hi: f32, soft: f32) -> f32 {
 }
 
 /** One mask part at this pixel (0…1), before feather and invert. `v`: its values 0–3, `v4`: value 4. */
-fn mask_part(kind: u32, reg: u32, band: u32, v: vec4<f32>, skin_w: f32, e: vec3<f32>, e0: vec3<f32>, uv: vec2<f32>) -> f32 {
+/**
+ * Shape mask (a graduated or radial filter), laid out as the Gradient Fill layer is.
+ * v = angle (rad, 90° = downwards), size, centre x, centre y; v4 = softness; reg = 0
+ * linear (on at the start side, fading out across the line), 1 radial (on inside).
+ */
+fn shape_mask(radial: bool, v: vec4<f32>, soft: f32, uv: vec2<f32>) -> f32 {
+  let d = vec2<f32>((uv.x - v.z) * lay_aspect, uv.y - v.w);
+  let s = clamp(soft, 0.0, 1.0);
+  if (radial) {
+    let t = length(d) / (max(v.y, 0.02) * 0.5 * length(vec2<f32>(lay_aspect, 1.0)));
+    return 1.0 - smoothstep(1.0 - s, 1.0 + 1e-3, t);
+  }
+  let dir = vec2<f32>(cos(v.x), sin(v.x));
+  let ext = 0.5 * (abs(dir.x) * lay_aspect + abs(dir.y));
+  let t = 0.5 + dot(d, dir) / (2.0 * ext * max(v.y, 0.02));
+  return 1.0 - smoothstep(0.5 - 0.5 * s - 1e-3, 0.5 + 0.5 * s + 1e-3, t);
+}
+
+fn mask_part(kind: u32, reg: u32, band: u32, v: vec4<f32>, v4: f32, skin_w: f32, e: vec3<f32>, e0: vec3<f32>, uv: vec2<f32>) -> f32 {
+  if (kind == 9u) { return shape_mask(reg == 1u, v, v4, uv); }
   if (kind == 2u) { return lay_bw[min(band, 2u)]; }
   if (kind == 4u) { return soft_range(dot(e, LUMAP3), v.x, v.y, v.z); }
   if (kind == 5u) {
@@ -131,14 +151,14 @@ fn mask_shape(m: f32, feather: f32, invert: bool) -> f32 {
 }
 
 fn layer_mask(L: LayerRec, skin_w: f32, e: vec3<f32>, e0: vec3<f32>, uv: vec2<f32>) -> f32 {
-  var m = mask_shape(mask_part(u32(L.m0.x), u32(L.m0.y), u32(L.m0.z), vec4<f32>(L.m1.xyz, L.r.z), skin_w, e, e0, uv), L.m1.w, L.m0.w > 0.5);
+  var m = mask_shape(mask_part(u32(L.m0.x), u32(L.m0.y), u32(L.m0.z), vec4<f32>(L.m1.xyz, L.r.z), L.r.w, skin_w, e, e0, uv), L.m1.w, L.m0.w > 0.5);
   // Extra parts, in order: add (either), subtract (and not), intersect (both).
   for (var k = 0u; k < 4u; k++) {
     let h = L.q[k * 3u];
     let kind = u32(h.x);
     if (kind == 0u) { break; }
     let x = L.q[k * 3u + 2u];
-    let p = mask_shape(mask_part(kind, u32(h.y), u32(h.z), L.q[k * 3u + 1u], skin_w, e, e0, uv), x.z, x.y > 0.5);
+    let p = mask_shape(mask_part(kind, u32(h.y), u32(h.z), L.q[k * 3u + 1u], x.x, skin_w, e, e0, uv), x.z, x.y > 0.5);
     let op = u32(h.w);
     if (op == 0u) { m = max(m, p); } else if (op == 1u) { m = m * (1.0 - p); } else { m = m * p; }
   }
@@ -310,7 +330,7 @@ fn op_gradient_fill(L: LayerRec, uv: vec2<f32>, aspect: f32) -> vec4<f32> {
 fn apply_layers(e0: vec3<f32>, g: array<f32, 12>, dist: f32, skin_w: f32, uv: vec2<f32>, aspect: f32) -> vec3<f32> {
   var e = e0;
   let n = u.lay.x;
-  layer_setup(g, dist);
+  layer_setup(g, dist, aspect);
   for (var i = 0u; i < n; i++) {
     let L = layers[i];
     var w = L.a.z * layer_mask(L, skin_w, e, e0, uv);

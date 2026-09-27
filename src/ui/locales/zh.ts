@@ -201,6 +201,8 @@ export const zh: Dict = {
   "mask.feather": "羽化",
   "mask.density": "密度",
   "mask.show": "在照片上显示蒙版",
+  "mask.shape": "形状",
+  "mask.shapes": "形状：",
   "mask.regions": "区域：",
   "mask.tapHint": "点按以选中 · 再点一次移除",
   "mask.selecting": "正在选取…",

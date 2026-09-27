@@ -133,3 +133,14 @@ test("mask parts pack after the type parameters: kind, op and values per part", 
   // No third part: kind 0 ends the list.
   assert.equal(r[56], 0);
 });
+
+test("shape masks pack their style, angle, size, centre and softness", async () => {
+  const { defaultShape } = await import("../src/layers/gpu.ts");
+  const l = makeLayer("basic", "S", { mask: { kind: "shape", shape: { ...defaultShape("radial"), x: 0.3, soft: 0.4 }, invert: true, feather: 1, density: 1,
+    parts: [{ kind: "shape", op: "intersect", shape: defaultShape("linear"), invert: false, feather: 1 }] } });
+  const r = packLayers([l]).records;
+  assert.equal(r[4], 9); assert.equal(r[5], 1); assert.equal(r[7], 1); // shape, radial, inverted
+  assert.ok(Math.abs(r[9] - 0.6) < 1e-6 && Math.abs(r[10] - 0.3) < 1e-6 && Math.abs(r[15] - 0.4) < 1e-6); // size, x, softness
+  assert.equal(r[32], 9); assert.equal(r[33], 0); assert.equal(r[35], 2); // part: linear shape, intersect
+  assert.ok(Math.abs(r[36] - Math.PI / 2) < 1e-6); // 90° in radians
+});

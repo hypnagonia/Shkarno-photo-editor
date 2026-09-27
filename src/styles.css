@@ -457,6 +457,7 @@ header.top .push { margin-left: auto; }
 .check-head { align-items: center; margin: 0 0 8px; }
 .check-summary { flex: 1; min-width: 0; }
 .check-view { display: block; width: 100%; height: auto; margin: 4px 0 10px; border: 1px solid var(--line); }
+.check-view[hidden] { display: none; } /* shown only for a finding tapped to see where */
 .check-list { display: flex; flex-direction: column; }
 .check-item { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .check-item.where { cursor: pointer; }
