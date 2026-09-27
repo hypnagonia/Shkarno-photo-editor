@@ -311,6 +311,10 @@ export function scanNoise(ref: Plane, aligned: Plane[], bins = 8): number[] {
     while (k < bins && !Number.isFinite(out[i - k] ?? NaN) && !Number.isFinite(out[i + k] ?? NaN)) k++;
     out[i] = Number.isFinite(out[i - k] ?? NaN) ? out[i - k] : Number.isFinite(out[i + k] ?? NaN) ? out[i + k] : 0.002;
   }
+  // Noise never falls with brightness (photon noise grows with it). A dark bin above a
+  // brighter one is misalignment or parallax at dark edges, not noise: capped, or the
+  // merge would take those differences for noise and blur them in.
+  for (let i = bins - 2; i >= 0; i--) out[i] = Math.min(out[i], out[i + 1]);
   return out;
 }
 

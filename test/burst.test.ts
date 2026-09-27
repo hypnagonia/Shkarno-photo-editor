@@ -101,3 +101,12 @@ test("burst align: another lens (a 2.1× longer view, no EXIF) is scaled and ali
   const scale = s0 * Math.hypot(m.a, m.b), rot = Math.atan2(m.b, m.a) * 180 / Math.PI;
   assert.ok(Math.abs(scale - z) < 0.02 && Math.abs(rot) < 0.1, `scale ${scale.toFixed(3)} rotation ${rot.toFixed(2)}°`);
 });
+
+test("burst: series noise never falls with brightness (dark misalignment is not noise)", () => {
+  const ref = scene(200, 150, undefined, 0.004, 3);
+  const other = scene(200, 150, undefined, 0.004, 9);
+  // Dark pixels that disagree a lot (a close object moved): must not raise the dark bins.
+  for (let i = 0; i < ref.d.length; i += 5) { ref.d[i] = 0.003; other.d[i] = 0.05; }
+  const sig = scanNoise(ref, [other]);
+  for (let i = 0; i + 1 < sig.length; i++) assert.ok(sig[i] <= sig[i + 1] + 1e-12, `bin ${i}: ${sig.map((v) => v.toFixed(4)).join(" ")}`);
+});
