@@ -92,7 +92,10 @@ export default defineConfig(({ command }) => ({
   // (public/ort, see scripts/copy-ort.mjs) instead of inlining it.
   // Build only: the dev server serves ORT unbundled and refuses imports from /public.
   resolve: command === "build"
-    ? { alias: [{ find: /^onnxruntime-web$/, replacement: fileURLToPath(new URL("./node_modules/onnxruntime-web/dist/ort.min.mjs", import.meta.url)) }] }
+    ? { alias: [
+      { find: /^onnxruntime-web$/, replacement: fileURLToPath(new URL("./node_modules/onnxruntime-web/dist/ort.min.mjs", import.meta.url)) },
+      { find: /^onnxruntime-web\/wasm$/, replacement: fileURLToPath(new URL("./node_modules/onnxruntime-web/dist/ort.wasm.min.mjs", import.meta.url)) },
+    ] }
     : {},
   define: { __ORT_EXTERNAL__: JSON.stringify(command === "build"), __BUILD__: JSON.stringify(Date.now().toString(36)) },
   build: { target: "es2022", assetsInlineLimit: 0, chunkSizeWarningLimit: 4000 },

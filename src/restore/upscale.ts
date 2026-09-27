@@ -24,6 +24,7 @@
  * interleave preview renders while a phone works through the tiles.
  */
 import type { Gpu } from "../gpu/gpu.ts";
+import type * as Ort from "onnxruntime-web";
 import { floatsToHalves, halvesToFloats } from "../gpu/half.ts";
 import { ort } from "../neural/ort.ts";
 import { WHITE, fromDisplay, toDisplay } from "./display.ts";
@@ -51,7 +52,7 @@ const S = 2;
  * but compute it wrongly (e.g. a checkerboard from reduced precision), which
  * a range check on the output would miss. One tile; returns the failure or "".
  */
-export async function probeUpscaler(session: ort.InferenceSession): Promise<string> {
+export async function probeUpscaler(session: Ort.InferenceSession): Promise<string> {
   const T = SR_TILE, O = 2 * T;
   const x = new Float32Array(3 * T * T);
   let mIn = 0;
@@ -96,7 +97,7 @@ export class UpscaleJob {
 
   constructor(
     private gpu: Gpu,
-    private session: ort.InferenceSession,
+    private session: Ort.InferenceSession,
     readonly src: GPUTexture,
     readonly W: number,
     readonly H: number,

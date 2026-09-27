@@ -44,10 +44,12 @@ export class SamSelector {
   readonly dims: [number, number];
   private emb?: Float32Array;
   private encoding?: Promise<void>;
-  private decoder?: Worker;
-  private decoderReady?: Promise<unknown>;
+  /** The one worker for both models (samWorker.ts); closed after a while without a tap. */
+  private worker?: Worker;
+  /** The worker has the embeddings (it encoded them, or was given them). */
+  private workerReady?: Promise<unknown>;
   private nextId = 1;
-  /** The decoder worker is closed after this long without a tap (its memory back; reopening takes ≈ 1 s). */
+  /** The worker is closed after this long without a tap (its memory back; reopening takes ≈ 1 s). */
   private idle = 0;
 
   constructor(private base: string, photoW: number, photoH: number, private phone = false) {
@@ -60,26 +62,24 @@ export class SamSelector {
   encode(image: () => Promise<Float32Array>): Promise<void> {
     this.encoding ??= (async () => {
       const px = await image();
-      const w = spawn();
-      try {
-        const [pw, ph] = this.dims;
-        const r = await ask(w, { type: "encode", base: this.base, phone: this.phone, image: px, w: pw, h: ph }, "embedding", undefined, [px.buffer]);
-        this.emb = r.emb;
-      } finally {
-        w.terminate(); // all of the encoder's memory, returned at once
-      }
-    })().catch((e) => { this.encoding = undefined; throw e; });
+      this.worker ??= spawn();
+      const [pw, ph] = this.dims;
+      const run = ask(this.worker, { type: "encode", base: this.base, phone: this.phone, image: px, w: pw, h: ph }, "embedding", undefined, [px.buffer]);
+      this.workerReady = run;
+      this.emb = (await run).emb;
+    })().catch((e) => { this.encoding = undefined; this.dispose(); throw e; });
     return this.encoding;
   }
 
   /** SAM's four 256² logit masks and their predicted quality for these taps. */
   async decode(points: SelectPoint[]): Promise<{ low: Float32Array; iou: Float32Array }> {
     if (!this.emb) throw new Error("photo not encoded for selection");
-    if (!this.decoder) {
-      this.decoder = spawn();
-      this.decoderReady = ask(this.decoder, { type: "init", base: this.base, phone: this.phone, emb: this.emb.slice() }, "ready");
+    if (!this.worker) {
+      // Closed while idle: a new worker gets the embeddings (no second encode).
+      this.worker = spawn();
+      this.workerReady = ask(this.worker, { type: "init", base: this.base, phone: this.phone, emb: this.emb.slice() }, "ready");
     }
-    await this.decoderReady;
+    await this.workerReady;
     const [pw, ph] = this.dims;
     // SAM's point prompt: coordinates in the 1024 square, plus a padding point (label −1) when there is no box.
     const coords = new Float32Array((points.length + 1) * 2);
@@ -89,7 +89,7 @@ export class SamSelector {
     const id = this.nextId++;
     clearTimeout(this.idle);
     try {
-      const r = await ask(this.decoder, { type: "decode", id, coords, labels, w: pw, h: ph }, "masks", id);
+      const r = await ask(this.worker, { type: "decode", id, coords, labels, w: pw, h: ph }, "masks", id);
       return { low: r.low, iou: r.iou };
     } finally {
       this.idle = setTimeout(() => this.dispose(), 30_000) as unknown as number;
@@ -98,8 +98,8 @@ export class SamSelector {
 
   dispose() {
     clearTimeout(this.idle);
-    this.decoder?.terminate();
-    this.decoder = undefined;
-    this.decoderReady = undefined;
+    this.worker?.terminate();
+    this.worker = undefined;
+    this.workerReady = undefined;
   }
 }

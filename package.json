@@ -12,7 +12,8 @@
     "build:cpu": "wasm-pack build native/cpu --target web --out-dir ../../src/cpu/pkg --release && rm -f src/cpu/pkg/.gitignore",
     "predev": "node scripts/copy-ort.mjs",
     "prebuild": "node scripts/copy-ort.mjs",
-    "memcheck": "node scripts/memcheck.mjs"
+    "memcheck": "node scripts/memcheck.mjs",
+    "deploy": "npm run build && node scripts/memcheck.mjs --no-build && npx vercel deploy --prod --yes"
   },
   "dependencies": {
     "libheif-js": "^1.19.8",

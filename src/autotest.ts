@@ -46,7 +46,25 @@ export async function runAutotest(app: AutotestApp) {
   });
   const finalPreview = (what: string) => waitFor((m) => m.type === "preview" && !!m.final, what);
   const settle = (ms = 1500) => new Promise((r) => setTimeout(r, ms));
+  /** Chrome's own account of JS + WebAssembly memory, by worker (where the browser has it). */
+  const jsMem = async (): Promise<Record<string, number>> => {
+    const pm = performance as Performance & { measureUserAgentSpecificMemory?: () => Promise<{ breakdown: Array<{ bytes: number; types: string[]; attribution: Array<{ url?: string; scope?: string }> }> }> };
+    if (!pm.measureUserAgentSpecificMemory) return {};
+    try {
+      const r = await pm.measureUserAgentSpecificMemory();
+      const out: Record<string, number> = {};
+      for (const b of r.breakdown) {
+        const who = b.attribution.map((a) => `${a.scope ?? ""}:${(a.url ?? "").split("/").pop()?.split("?")[0] ?? ""}`).join(",") || "shared";
+        const k = `${who} [${b.types.join("+") || "-"}]`;
+        out[k] = (out[k] ?? 0) + Math.round(b.bytes / 1048576);
+      }
+      return out;
+    } catch { return {}; }
+  };
+  /** The engine's GPU memory: now, and the peak since the last ask (asking resets it). */
+  const mem = async () => { const r = waitFor((m) => m.type === "mem", "mem", 60_000); app.send({ type: "mem" }); const m = await r; return m.type === "mem" ? { gpuLiveMB: m.liveMB, gpuPeakMB: m.peakMB } : {}; };
   const open = async (label: string) => {
+    await mem();
     await report(`${label}:start`);
     const res = await fetch(`/__samples/${encodeURIComponent(photo)}`);
     if (!res.ok) throw new Error(`sample ${photo}: ${res.status}`);
@@ -55,18 +73,19 @@ export async function runAutotest(app: AutotestApp) {
     app.openFile(f);
     await done;
     await settle(3000); // restoration / quality stages after the first final preview
-    await report(`${label}:done`, { profile: lastProfile });
+    await report(`${label}:done`, { profile: lastProfile, ...(await mem()), js: await jsMem() });
   };
   const addLayer = async (label: string, layer: ReturnType<typeof makeLayer>) => {
     const p = app.params();
     if (!p) throw new Error("no photo");
+    await mem();
     await report(`${label}:start`);
     const done = finalPreview(label);
     p.layers = [...(p.layers ?? []), layer];
     app.pushParams();
     await done;
     await settle();
-    await report(`${label}:done`);
+    await report(`${label}:done`, { ...(await mem()), js: await jsMem() });
   };
   const center = { kind: "select" as const, points: [[0.5, 0.5, 1]] as Array<[number, number, 0 | 1]>, invert: false, feather: 1, density: 1 };
   try {
@@ -77,11 +96,12 @@ export async function runAutotest(app: AutotestApp) {
       else if (s === "select") await addLayer("select", makeLayer("basic", "Autotest select", { mask: center, params: { exposure: 0.4, temp: 0, tint: 0, saturation: 0, vibrance: 0, hue: 0 } }));
       else if (s === "blur") await addLayer("blur", makeLayer("blur", "Autotest blur", { mask: { ...center, invert: true }, params: { amount: 0.5 } }));
       else if (s === "export") {
+        await mem();
         await report("export:start");
         const done = waitFor((m) => m.type === "exported", "export");
         app.send({ type: "export", format: "jpeg", quality: 0.92, space: "p3" });
         await done;
-        await report("export:done");
+        await report("export:done", { ...(await mem()), js: await jsMem() });
       }
     }
     await report("done");

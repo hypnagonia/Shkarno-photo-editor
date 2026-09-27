@@ -71,6 +71,8 @@ export type ToWorker =
   | { type: "palette" }
   /** Check the finished photo for technical mistakes. */
   | { type: "check" }
+  /** GPU memory now and the peak since the last ask (the local memory guard). */
+  | { type: "mem" }
   /** What is under a tap on the photo (x, y: 0…1 of the picture), for building a mask from it. */
   | { type: "pick"; x: number; y: number; /** The layer (index among the live layers) whose mask the tap edits. */ layer?: number; /** A tap selects an object (tap-to-select). */ object?: boolean }
   | { type: "reference"; file: File; mode: "create" | "match"; amount: number }
@@ -101,6 +103,7 @@ export type FromWorker =
   | { type: "palette"; stats: ColorStats }
   | { type: "pick"; info?: PickInfo }
   | { type: "check"; items: CheckItem[]; rgba: Uint8Array; w: number; h: number }
+  | { type: "mem"; liveMB: number; peakMB: number }
   | { type: "lookProfile"; profile: LookProfile; reference: ColorStats; message: string }
   | { type: "gpu-lost"; reason: string }
   | { type: "upscale"; info: UpscaleInfo }

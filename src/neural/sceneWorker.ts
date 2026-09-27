@@ -8,9 +8,12 @@
  *
  * In:  { img: AnalysisImage, base, detailTiles, withDepth, depthLong }   Out: { maps: SceneMaps } | { error }
  */
-import { Neural } from "./ort.ts";
+import { Neural, useCpuRuntime } from "./ort.ts";
 import { forcePhone } from "../device.ts";
 import { analyseScene, type AnalysisImage, type SceneMaps } from "./scene.ts";
+
+// CPU only here: the plain WebAssembly runtime (see ort.ts), before anything loads it.
+useCpuRuntime();
 
 const post = (m: unknown, transfer: Transferable[] = []) => (self as unknown as DedicatedWorkerGlobalScope).postMessage(m, transfer);
 

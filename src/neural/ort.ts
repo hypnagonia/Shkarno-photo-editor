@@ -9,7 +9,18 @@
  * Models are fetched from this origin only and cached with the Cache API, so
  * after the first visit the app works offline and nothing leaves the device.
  */
-import * as ort from "onnxruntime-web";
+import * as ortWebgpu from "onnxruntime-web";
+import type * as Ort from "onnxruntime-web";
+import * as ortCpu from "onnxruntime-web/wasm";
+
+/**
+ * The ONNX Runtime in use. The engine has the WebGPU-capable build; workers that
+ * only run on the CPU (scene analysis, tap-to-select) switch to the plain
+ * WebAssembly build first (useCpuRuntime): measured on MobileSAM, 450 MB instead of
+ * 720 MB and faster — the WebGPU-capable runtime costs that much even on the CPU.
+ */
+export let ort = ortWebgpu;
+export function useCpuRuntime() { ort = ortCpu as unknown as typeof ortWebgpu; }
 import type { Gpu } from "../gpu/gpu.ts";
 import { isIOS } from "../device.ts";
 
@@ -155,9 +166,9 @@ export class Neural {
   }
 
   /** `backend` forces WASM for one model (fallback when its WebGPU session fails). */
-  async session(spec: ModelSpec, gpuOutput: boolean, backend: Backend = this.backend): Promise<ort.InferenceSession> {
+  async session(spec: ModelSpec, gpuOutput: boolean, backend: Backend = this.backend): Promise<Ort.InferenceSession> {
     const bytes = await this.fetchModel(spec, backend);
-    const opts: ort.InferenceSession.SessionOptions = {
+    const opts: Ort.InferenceSession.SessionOptions = {
       executionProviders: backend === "webgpu" ? ["webgpu"] : ["wasm"],
       graphOptimizationLevel: "all",
       enableMemPattern: backend === "wasm",
@@ -170,4 +181,3 @@ export class Neural {
   }
 }
 
-export { ort };

@@ -145,6 +145,16 @@ export class Gpu {
     this.live.set(r, t);
     const total = this.liveBytes();
     if (total > this.peakBytes) this.peakBytes = total;
+    if (total > this.stepPeak) this.stepPeak = total;
+  }
+
+  /** Peak since the last takeStepPeak(), independent of the profiler's per-stage resets (the memory guard's steps). */
+  private stepPeak = 0;
+  takeStepPeak(): number {
+    const live = this.liveBytes();
+    const p = Math.max(this.stepPeak, live);
+    this.stepPeak = live;
+    return p;
   }
 
   release(...rs: Array<GPUTexture | GPUBuffer | undefined | null>) {

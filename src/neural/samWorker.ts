@@ -1,15 +1,23 @@
 /// <reference lib="webworker" />
 /**
- * Tap-to-select (MobileSAM) on the CPU, in a worker of its own (see sam.ts).
+ * Tap-to-select (MobileSAM) on the CPU, in one worker (see sam.ts).
  *
- * "encode": the photo (HWC, 0…255, long side 1024) → image embeddings. The
- *   encoder's memory can never shrink inside ONNX Runtime's wasm heap, so the
- *   worker that encodes is terminated right after it answers.
- * "init" + "decode": a second, long-lived worker keeps only the small decoder
- *   and the embeddings; each tap is one ≈ 20 ms decode.
+ * One ONNX Runtime for both models: a runtime costs ≈ 200 MB before it runs
+ * anything, and an encoder worker and a decoder worker side by side (plus the
+ * first one's memory not yet returned) peaked near 2 GB on a phone path. Here the
+ * encoder runs, is released, and the small decoder reuses the same memory.
+ *
+ * "encode": the photo (HWC, 0…255, long side 1024) → image embeddings (kept here,
+ *   and sent back so the engine can restart this worker without encoding again).
+ * "init":   embeddings from the engine (a restarted worker).
+ * "decode": taps → SAM's four 256² masks and their predicted quality.
  */
-import { Neural, MODELS, ort } from "./ort.ts";
+import { Neural, MODELS, ort, useCpuRuntime } from "./ort.ts";
+import type * as Ort from "onnxruntime-web";
 import { forcePhone } from "../device.ts";
+
+// CPU only here: the plain WebAssembly runtime (see ort.ts), before anything loads it.
+useCpuRuntime();
 
 type In =
   | { type: "encode"; base: string; phone?: boolean; image: Float32Array; w: number; h: number }
@@ -18,27 +26,29 @@ type In =
 
 const post = (m: unknown, transfer: Transferable[] = []) => (self as unknown as DedicatedWorkerGlobalScope).postMessage(m, transfer);
 
-let decoder: ort.InferenceSession | undefined;
-let emb: ort.Tensor | undefined;
+let neural: Neural | undefined;
+let decoder: Ort.InferenceSession | undefined;
+let emb: Ort.Tensor | undefined;
 
 self.onmessage = async (ev: MessageEvent<In>) => {
   const m = ev.data;
   if ("phone" in m && m.phone) forcePhone(true);
   try {
+    if (m.type === "encode" || m.type === "init") neural ??= await Neural.create(undefined, m.base, true);
     if (m.type === "encode") {
-      const neural = await Neural.create(undefined, m.base, true);
-      const s = await neural.session(MODELS.samEncoder, false, "wasm");
+      const s = await neural!.session(MODELS.samEncoder, false, "wasm");
       const out = await s.run({ input_image: new ort.Tensor("float32", m.image, [m.h, m.w, 3]) });
       const e = Float32Array.from((await out[s.outputNames[0]].getData()) as Float32Array);
+      for (const t of Object.values(out)) t.dispose();
       await s.release();
-      post({ type: "embedding", emb: e }, [e.buffer]);
+      emb = new ort.Tensor("float32", e, [1, 256, 64, 64]);
+      post({ type: "embedding", emb: e.slice() });
     } else if (m.type === "init") {
-      const neural = await Neural.create(undefined, m.base, true);
-      decoder = await neural.session(MODELS.samDecoder, false, "wasm");
       emb = new ort.Tensor("float32", m.emb, [1, 256, 64, 64]);
       post({ type: "ready" });
     } else if (m.type === "decode") {
-      if (!decoder || !emb) throw new Error("selection decoder not ready");
+      if (!emb || !neural) throw new Error("selection not encoded");
+      decoder ??= await neural.session(MODELS.samDecoder, false, "wasm");
       const n = m.labels.length;
       const out = await decoder.run({
         image_embeddings: emb,

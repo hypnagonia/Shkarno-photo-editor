@@ -104,6 +104,9 @@ async function handle(m: ToWorker) {
       post({ type: "pick", info });
       break;
     }
+    case "mem":
+      post({ type: "mem", ...engine.memStats() });
+      break;
     case "check": {
       const r = await engine.check();
       post({ type: "check", ...r }, [r.rgba.buffer, ...r.items.flatMap((i) => (i.mask ? [i.mask.buffer] : []))]);

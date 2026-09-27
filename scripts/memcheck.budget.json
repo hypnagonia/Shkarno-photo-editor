@@ -2,6 +2,7 @@
   "photos": ["IMG_1514.DNG", "IMG_8163.HEIC"],
   "steps": ["open", "select", "blur", "export", "reopen"],
   "timeoutSec": 420,
-  "totalMB": 1400,
-  "stepMB": {}
+  "_note": "Peaks measured 2026-09-27 on the iPhone path (?phone) with about 25 % headroom. pageMB: the page process (the app and all its workers); gpuProcMB: the browser's GPU process above its own overhead; engineGpuMB: every texture and buffer the engine allocates (exact, the same in every browser). Raise a budget only with a reason in the commit.",
+  "chrome": { "pageMB": 950, "gpuProcMB": 1000, "engineGpuMB": 560 },
+  "safari": { "pageMB": 950, "gpuProcMB": 1000, "engineGpuMB": 560 }
 }

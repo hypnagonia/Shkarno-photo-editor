@@ -1321,7 +1321,7 @@ export class Engine {
   private async selectionMask(s: Session, st: Selections, m: MaskShape): Promise<Uint8Array> {
     const { w, h } = s.maps;
     if (!st.sam.encoded) {
-      this.progress("selection");
+      this.progress("selection", "encode");
       await st.sam.encode(async () => {
         // The photo as SAM sees it: display-encoded, long side 1024, HWC 0…255.
         const [pw, ph] = st.sam.dims;
@@ -1339,7 +1339,9 @@ export class Engine {
       st.guide = new Float32Array(w * h);
       for (let i = 0; i < w * h; i++) st.guide[i] = Math.min(1, Math.max(0, 0.2126 * g[i * 4] + 0.7152 * g[i * 4 + 1] + 0.0722 * g[i * 4 + 2]));
     }
+    this.progress("selection", "decode");
     const { low, iou } = await st.sam.decode(m.points!);
+    this.progress("selection", "filter");
     // No level chosen: SAM's own pick, its most confident of the three readings.
     const k = m.level === undefined ? [1, 2, 3].reduce((a, b) => (iou[b] > iou[a] ? b : a)) : levelsByArea(low)[m.level];
     return selectionMask(low, k, st.sam.dims, w, h, st.guide);
@@ -1489,6 +1491,12 @@ export class Engine {
   }
 
   get session() { return this.s; }
+
+  /** GPU memory the engine holds now and at most since the last call (MB): the memory guard's per-step numbers. */
+  memStats(): { liveMB: number; peakMB: number } {
+    const MB = 1048576;
+    return { liveMB: +(this.gpu.liveBytes() / MB).toFixed(1), peakMB: +(this.gpu.takeStepPeak() / MB).toFixed(1) };
+  }
   get wbCamera(): CameraColor | undefined { return this.s?.work.camera; }
 }
 
