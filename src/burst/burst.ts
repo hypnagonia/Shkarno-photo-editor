@@ -24,7 +24,7 @@ import { develop, type WorkingImage } from "../raw/develop.ts";
 import { downsample } from "../refine/refine.ts";
 import { denoiseGPU } from "../restore/denoise.ts";
 import { measureBlocks, noiseProfile } from "../analysis/analysis.ts";
-import { alignTiles, coveredTiles, searchScale, exposureRatio, fitGlobal, flowAt, modelAt, pyramid, regularise, resamplePlane, rescale, scaleOf, scanNoise, sharpness, texturedTiles, warp, type Affine, type Flow, type Plane } from "./align.ts";
+import { alignTiles, coveredTiles, searchScale, exposureRatio, fitGlobal, flowAt, half, modelAt, pyramid, regularise, resamplePlane, rescale, scaleOf, scanNoise, sharpness, texturedTiles, warp, type Affine, type Flow, type Plane } from "./align.ts";
 
 export type BurstMode = "clean";
 
@@ -75,6 +75,8 @@ interface Aligned {
   g: number;
   /** Another lens: the reference → frame mapping at full size, per-channel colour gains, and the frame's weight. */
   lens?: { aff: Affine; gc: [number, number, number]; weight: number };
+  /** Less weight for a frame shaken more than the reference (its detail is softer). */
+  sharpWeight: number;
 }
 
 async function decodeDev(gpu: Gpu, file: File, factor: number | ((w: number, h: number) => number)): Promise<{ decoded: DecodedImage; work: WorkingImage }> {
@@ -140,7 +142,8 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
   for (const s of scans) groups.set(lensOf(s), [...(groups.get(lensOf(s)) ?? []), s]);
   const main = [...groups.values()].sort((a, b) => b.length - a.length || b[0].W * b[0].H - a[0].W * a[0].H)[0];
   const evMid = median(main.map((s) => s.ev));
-  for (const s of scans) s.sharp = sharpness(sqrtPlane(s.y, 1 / 2 ** evMid));
+  // Sharpness at half the scan size (noise mostly averaged out), each frame at its own level.
+  for (const s of scans) s.sharp = sharpness(half(sqrtPlane(s.y, 1 / 2 ** s.ev)));
   const byUser = opt.ref !== undefined ? scans.find((s) => s.index === opt.ref) : undefined;
   const ref = byUser ?? main.filter((s) => Math.abs(s.ev - evMid) < 0.35).sort((a, b) => b.sharp - a.sharp)[0] ?? main[0];
   const W = ref.W, H = ref.H, factor = ref.factor;
@@ -199,11 +202,17 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
       opt.log(`series: ${s.file.name} another lens (${lensOf(s)}): scale ×${(1 / scaleOf(aff)).toFixed(3)} to the reference, colour ×${gc.map((v) => v.toFixed(3)).join("/")}, weight ${lens.weight.toFixed(2)}`);
     }
     opt.log(`series: ${s.file.name} shift ${shift.toFixed(1)} px, rotation ${rot.toFixed(2)}°, exposure ×${g.toFixed(3)}`);
-    aligned.push({ scan: s, flow: init, g, lens });
+    // A frame softer than the reference (hand shake): its share falls with the square of that.
+    const sharpWeight = Math.min(1, Math.max(0.1, (s.sharp / Math.max(1e-12, ref.sharp)) ** 2));
+    opt.log(`series: ${s.file.name} sharpness ${(s.sharp / Math.max(1e-12, ref.sharp)).toFixed(2)} of the reference → weight ${sharpWeight.toFixed(2)}`);
+    aligned.push({ scan: s, flow: init, g, lens, sharpWeight });
     warpedY.push({ ...wy, d: wy.d.map((v) => (v < 0 ? -1 : v * g)) });
   }
   const sig = scanNoise(ref.y, warpedY);
   const midSig = sig[5];
+  // Pass B needs none of the scan planes (≈ 7 MB a frame): freed before its GPU peak.
+  warpedY.length = 0;
+  for (const s of scans) if (s !== ref) { s.y = { w: s.y.w, h: s.y.h, d: new Float32Array(0) }; s.rgb = [s.y, s.y, s.y]; }
   opt.log(`series: noise σ per √Y bin (scan) ${sig.map((v) => (v * 1000).toFixed(2)).join(" ")} ×1e-3`);
   if (opt.cancelled()) throw new Error("cancelled");
 
@@ -216,7 +225,7 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
     const L = a?.lens;
     return new Uniforms(28).u32(W, H, tw, th).f32(g, scanK / 3, aligned.length + 1).u32(mode).f32(...sig)
       .f32(L?.aff.a ?? 1, L?.aff.b ?? 0, L?.aff.tx ?? 0, L?.aff.ty ?? 0).f32(a?.scan.W ?? W, a?.scan.H ?? H, 0, 0)
-      .f32(...(L?.gc ?? [1, 1, 1]), L?.weight ?? 1).bytes();
+      .f32(...(L?.gc ?? [1, 1, 1]), (L?.weight ?? 1) * (a?.sharpWeight ?? 1)).bytes();
   };
 
   opt.progress("series merge", `1/${aligned.length + 1}`, 0.35);
@@ -256,12 +265,13 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
         if (a.lens) {
           // Another lens: resampled into the reference's view first (colour matched, uncovered parts marked).
           const warped = gpu.tex("burst.resampled", W, H, "rgba16float");
+          const native = F.work.tex;
+          frame = warped; // (released in finally, whatever happens)
           await gpu.run("burst.resample", (enc, temp) => {
             const u = gpu.uniform(uni(a.g, 0, a)); temp.push(u);
-            gpu.dispatch(enc, pipe("resample"), [u, F.work.tex.createView(), undefined, undefined, undefined, undefined, undefined, sampler, undefined, undefined, undefined, warped.createView()], Math.ceil(W / 8), Math.ceil(H / 8));
+            gpu.dispatch(enc, pipe("resample"), [u, native.createView(), undefined, undefined, undefined, undefined, undefined, sampler, undefined, undefined, undefined, warped.createView()], Math.ceil(W / 8), Math.ceil(H / 8));
           }, true);
-          gpu.release(F.work.tex);
-          frame = warped;
+          gpu.release(native);
         }
         // Starting offsets per full-size tile, from the scan's field.
         const init = new Float32Array(tw * th * 2);
@@ -294,11 +304,12 @@ export async function mergeSeries(gpu: Gpu, files: File[], opt: SeriesOptions): 
     gpu.release(dummy);
     if (aligned.length >= 1) {
       const dn = await denoiseGPU(gpu, out, W, H, gain, noise);
-      await gpu.run("burst.ghosts", (enc, temp) => {
-        const u = gpu.uniform(uni(1, 1)); temp.push(u);
-        gpu.dispatch(enc, pipe("finalize"), [u, undefined, undefined, undefined, undefined, undefined, undefined, undefined, acc, undefined, dn.createView(), out!.createView()], Math.ceil(W / 8), Math.ceil(H / 8));
-      }, true);
-      gpu.release(dn);
+      try {
+        await gpu.run("burst.ghosts", (enc, temp) => {
+          const u = gpu.uniform(uni(1, 1)); temp.push(u);
+          gpu.dispatch(enc, pipe("finalize"), [u, undefined, undefined, undefined, undefined, undefined, undefined, undefined, acc, undefined, dn.createView(), out!.createView()], Math.ceil(W / 8), Math.ceil(H / 8));
+        }, true);
+      } finally { gpu.release(dn); }
     }
     gpu.release(acc);
     const used = aligned.length + 1;

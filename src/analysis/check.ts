@@ -360,8 +360,9 @@ export function checkPhoto(inp: CheckInput, only?: CheckId, beforePlanes?: Check
       if (range < 4) continue;
       smooth++;
       let used = 0; for (let g = gmin; g <= gmax; g++) used += seen[g];
-      // A ramp over `range` levels that uses under half of them: steps.
-      if (used / (range + 1) < 0.5) {
+      // A ramp over `range` levels that uses under half of them: steps. (A steep ramp
+      // crosses a 16 px block in at most ~16 pixels: it cannot show more levels than that.)
+      if (used / Math.min(range + 1, B16) < 0.5) {
         banded++;
         for (let y = by; y < by + B16; y++) for (let x = bx; x < bx + B16; x++) m[y * w + x] = 1;
       }

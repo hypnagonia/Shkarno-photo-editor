@@ -43,7 +43,7 @@ export interface RenderOptions {
   gain: number; // analysis/guide encoding gain k
   lightLinear: [number, number, number];
   output: "srgb8" | "p38" | "p3f16";
-  debugView?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  debugView?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
   /** Depth range highlighted by debug view 5. */
   zoneRange?: [number, number];
   /** Region index highlighted by debug view 4. */
@@ -282,7 +282,7 @@ export class Renderer {
     const { size: lutSize, identity } = this.ensureLuts(p, hdrStops);
     // The blur pass: depth of field, and/or Blur layers (a radius of 3 % of the long side at amount 1).
     const depthDof = dofOn && p.dof.strength > 0;
-    const blurR = o.debugView !== 7 && hasBlurLayers(p.layers ?? [], p.autoCurves ?? 1, p.enable) ? 0.03 * Math.max(W, H) : 0;
+    const blurR = o.debugView !== 7 && o.debugView !== 8 && hasBlurLayers(p.layers ?? [], p.autoCurves ?? 1, p.enable) ? 0.03 * Math.max(W, H) : 0;
     const dof = depthDof || blurR > 0;
     const maxRadius = depthDof ? p.dof.strength * 0.022 * Math.max(W, H) : 0;
     const y0 = strip?.y0 ?? 0, rows = strip?.rows ?? H;
@@ -318,7 +318,7 @@ export class Renderer {
       finalLinear = true;
     }
     const gr = p.grain;
-    if (gr && gr.amount > 0 && o.debugView !== 1 && o.debugView !== 2 && o.debugView !== 7) {
+    if (gr && gr.amount > 0 && o.debugView !== 1 && o.debugView !== 2 && o.debugView !== 7 && o.debugView !== 8) {
       // Last, on the finished image. Particle size is set for a ~12 MP frame and
       // scales with the image; `scale` is this render's pixels per full-image pixel.
       const sizePx = (0.7 + 2.3 * gr.size) * Math.max(W / scale, H / scale) / 4032;

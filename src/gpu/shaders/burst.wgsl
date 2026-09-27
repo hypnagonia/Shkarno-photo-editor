@@ -25,7 +25,7 @@ struct U {
   sig0: vec4<f32>, sig1: vec4<f32>, // noise σ (linear) per √Y bin, 8 bins
   aff: vec4<f32>,  // another lens: reference → frame pixels, q − c_f = [a −b; b a](p − c_r) + t
   fsize: vec4<f32>, // that frame's size
-  gc: vec4<f32>,   // its colour gains (rgb) and weight (a)
+  gc: vec4<f32>,   // its colour gains (rgb, another lens) and weight (a: lens detail × sharpness)
 }
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var frame: texture_2d<f32>;
@@ -123,6 +123,34 @@ fn frame_at(p: vec2<f32>) -> vec4<f32> {
   return textureSampleLevel(frame, samp, p / vec2<f32>(f32(u.w), f32(u.h)), 0.0);
 }
 
+/**
+ * The frame at p, Catmull-Rom (bicubic): a sub-pixel shift keeps the frame's detail,
+ * where bilinear sampling would average neighbours (a ½-pixel shift = a 2-tap blur).
+ * Never below 0 (the kernel's small overshoot).
+ */
+fn frame_sharp(p: vec2<f32>) -> vec3<f32> {
+  let q = p - 0.5;
+  let i = floor(q); let f = q - i;
+  let f2 = f * f; let f3 = f2 * f;
+  let w0 = -0.5 * f3 + f2 - 0.5 * f;
+  let w1 = 1.5 * f3 - 2.5 * f2 + 1.0;
+  let w2 = -1.5 * f3 + 2.0 * f2 + 0.5 * f;
+  let w3 = 0.5 * f3 - 0.5 * f2;
+  let wx = array<f32, 4>(w0.x, w1.x, w2.x, w3.x);
+  let wy = array<f32, 4>(w0.y, w1.y, w2.y, w3.y);
+  let mx = vec2<i32>(i32(u.w) - 1, i32(u.h) - 1);
+  var c = vec3<f32>(0.0);
+  for (var y = 0; y < 4; y++) {
+    var row = vec3<f32>(0.0);
+    for (var x = 0; x < 4; x++) {
+      let t = clamp(vec2<i32>(i) + vec2<i32>(x - 1, y - 1), vec2<i32>(0), mx);
+      row += wx[x] * textureLoad(frame, t, 0).rgb;
+    }
+    c += wy[y] * row;
+  }
+  return max(c, vec3<f32>(0.0));
+}
+
 fn acc_get(x: i32, y: i32) -> vec4<f32> {
   let i = u32(clamp(y, 0, i32(u.h) - 1)) * u.w + u32(clamp(x, 0, i32(u.w) - 1));
   let v = acc[i];
@@ -160,7 +188,7 @@ fn weight_at(px: i32, py: i32) -> f32 {
   let t = dot(d, d) / 3.0 / s2;
   // Within ~1.7σ: full weight; beyond, falling fast (a moving thing, a misalignment).
   let w = exp(-max(0.0, t - 3.0) * 0.5);
-  // A frame scaled up (darker) carries more noise; a wider lens's frame, less detail.
+  // A frame scaled up (darker) carries more noise; a wider lens's or a shaken frame, less detail.
   return w * clamp(1.0 / (u.g * u.g), 0.25, 4.0) * u.gc.w;
 }
 
@@ -180,7 +208,7 @@ fn accumulate(@builtin(global_invocation_id) id: vec3<u32>) {
   let w = select(ww.x, ww.y, (id.x & 1u) == 1u);
   if (w < 1e-3) { return; }
   let p = vec2<f32>(vec2<u32>(id.xy)) + 0.5;
-  let x = frame_at(p + flow_at(p)).rgb * u.g;
+  let x = frame_sharp(p + flow_at(p)) * u.g;
   let i = id.y * u.w + id.x;
   let v = acc[i];
   var m = vec4<f32>(unpack2x16float(v.x), unpack2x16float(v.y));

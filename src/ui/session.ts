@@ -142,6 +142,15 @@ export async function restorablePhoto(): Promise<{ file: File; params?: Params }
   }
 }
 
+/**
+ * No photo to restore (a merged series: its frames are not stored, and reopening
+ * one of them unmerged with the series' edits would be wrong).
+ */
+export function forgetPhoto() {
+  try { localStorage.removeItem(META); localStorage.removeItem(PARAMS); sessionStorage.removeItem(ACTIVE); } catch { /* private mode */ }
+  forgetPendingParams();
+}
+
 export function forgetSession() {
   try { sessionStorage.removeItem(ACTIVE); } catch { /* ignore */ }
 }

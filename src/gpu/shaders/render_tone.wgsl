@@ -678,7 +678,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   }
 
   // --- creative layer --------------------------------------------------------------------
-  if (prof.f.x > 0.5) {
+  // (Not in the read-back views 7 and 8: they report values, not a look.)
+  if (prof.f.x > 0.5 && u.flags.w < 7u) {
     e = apply_profile(e, maps.g, dist, apple_skin);
   }
 
@@ -705,8 +706,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let w = select(clamp(gs2[min(sel, 10u)], 0.0, 1.0), skin_w, sel == 11u) * inr;
     e = mix(e * 0.22, e, smoothstep(0.1, 0.6, w));
   }
+  // View 8: the colour before the layers (what a colour mask is keyed on), read back under a tap.
+  if (u.flags.w == 8u) { e = e_pre; }
   var sharpen = sem.sharpen * mix(u.tone.z, u.tone.w, smoothstep(0.1, 0.9, dist));
-  if ((flags & EN_SHARPEN) == 0u) { sharpen = 0.0; }
+  if ((flags & EN_SHARPEN) == 0u || u.flags.w >= 7u) { sharpen = 0.0; }
   textureStore(dst, tp, vec4<f32>(e, sharpen));
   // Distance (0…1) for the blur pass, with Blur layers' amount packed above it:
   // + 2 × amount in thousandths (decoded in render_dof.wgsl's coc_pass).

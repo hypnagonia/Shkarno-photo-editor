@@ -348,10 +348,16 @@ export class Engine {
     if (series && series.files.length > 1) {
       // Several shots of one scene: merged into one working image (src/burst), then opened like a photo.
       const { mergeSeries } = await import("../burst/burst.ts");
-      const r = await P.time("series merge", () => mergeSeries(gpu, series.files, {
-        factorFor, mode: "clean", ref: series.ref, exposureGain: exposureGainY,
-        progress: (st, d, f) => this.progress(st, d, f), log: (t) => this.log(t), track, cancelled: () => gen !== this.generation,
-      }), (r) => `${r.used} frames ${r.work.width}×${r.work.height}`);
+      let r: Awaited<ReturnType<typeof mergeSeries>>;
+      try {
+        r = await P.time("series merge", () => mergeSeries(gpu, series.files, {
+          factorFor, mode: "clean", ref: series.ref, exposureGain: exposureGainY,
+          progress: (st, d, f) => this.progress(st, d, f), log: (t) => this.log(t), track, cancelled: () => gen !== this.generation,
+        }), (r) => `${r.used} frames ${r.work.width}×${r.work.height}`);
+      } catch (e) {
+        if (gen !== this.generation) { this.log("series merge: stopped (another photo was opened)"); return; }
+        throw e;
+      }
       decoded = r.decoded; work = r.work; file = r.file;
       track(() => gpu.release(work.tex));
       seriesInfo = { files: series.files, refIndex: r.refIndex, used: r.used, factor: r.factor, noise: r.noise };
@@ -678,6 +684,8 @@ export class Engine {
   /** "Upscale 2× now" from the Upscale tab: overrides the decision (never the memory budget). */
   forceUpscale() {
     const s = this.s;
+    // A merged series has no 2× stage (the merge is its detail stage; A/B swaps 1× textures).
+    if (s?.series) return;
     const info = s?.upscale;
     if (!s || !info || s.scale !== 1 || info.state === "running" || info.state === "pending") return;
     const q = decideUpscale(info.report.metrics, {
@@ -804,6 +812,13 @@ export class Engine {
     this.dropThumb(); // look previews must see the restored image
   }
 
+  /**
+   * A new open is on its way (called outside the queue, when the message arrives):
+   * the open running now stops at its next check instead of finishing first — a
+   * series merge would otherwise hold the queue for every one of its frames.
+   */
+  cancelOpen() { this.generation++; }
+
   private postSeries() {
     const r = this.s?.series;
     this.post({ type: "series", info: r ? { frames: r.used, ref: r.files[r.refIndex].name, noise: r.noise, showing: r.showing } : undefined });
@@ -821,14 +836,15 @@ export class Engine {
       this.progress("series single");
       const { developSingle } = await import("../burst/burst.ts");
       const w = await developSingle(this.gpu, r.files[r.refIndex], r.factor);
-      if (this.s !== s) { this.gpu.release(w.tex); return; }
       let dn = w.tex;
-      if (s.decision.plan.denoise) {
-        const noise = noiseProfile(await measureBlocks(this.gpu, w.tex, w.width, w.height, s.gain, 0.02));
-        dn = await denoiseGPU(this.gpu, w.tex, w.width, w.height, s.gain, noise);
-        const m = noise.mid / Math.max(1e-6, s.report.noise.mid);
-        this.log(`series A/B: one shot noise ${(noise.mid * 255).toFixed(2)}/255 vs merge ${(s.report.noise.mid * 255).toFixed(2)}/255 (×${m.toFixed(2)})`);
-      }
+      try {
+        if (this.s === s && s.decision.plan.denoise) {
+          const noise = noiseProfile(await measureBlocks(this.gpu, w.tex, w.width, w.height, s.gain, 0.02));
+          dn = await denoiseGPU(this.gpu, w.tex, w.width, w.height, s.gain, noise);
+          const m = noise.mid / Math.max(1e-6, s.report.noise.mid);
+          this.log(`series A/B: one shot noise ${(noise.mid * 255).toFixed(2)}/255 vs merge ${(s.report.noise.mid * 255).toFixed(2)}/255 (×${m.toFixed(2)})`);
+        }
+      } catch (e) { this.gpu.release(w.tex, dn); throw e; }
       if (this.s !== s) { this.gpu.release(w.tex, dn); return; }
       r.single = { tex: w.tex, denoised: dn };
     }
@@ -837,6 +853,9 @@ export class Engine {
     s.work = { ...s.work, tex: use.tex };
     s.denoised = use.denoised;
     r.showing = single ? "single" : "merged";
+    // Phones: the single shot is not kept while the merge shows (two more full-size
+    // textures for the whole session); it is developed again on the next A/B.
+    if (!single && r.single && isMobile()) { const o = r.single; r.single = undefined; if (o.denoised !== o.tex) this.gpu.release(o.denoised); this.gpu.release(o.tex); }
     this.dropThumb();
     await this.makeProxy();
     this.postSeries();
@@ -1302,8 +1321,9 @@ export class Engine {
     if (region === "person" && skin && skin.data[Math.min(skin.height - 1, Math.round(y * (skin.height - 1))) * skin.width + Math.min(skin.width - 1, Math.round(x * (skin.width - 1)))] > 127) region = "skin";
     // The colour before the layers (the layers' masks compare against exactly that).
     const t = await this.ensureThumb(384);
-    const p: Params = { ...s.params, layers: [], enable: { ...s.params.enable, dof: false } };
-    const r = await this.renderer.render({ base: t.base, denoised: t.denoised, width: t.w, height: t.h, fullWidth: s.work.width }, s.maps, p, { wb: this.wbFor(p), gain: s.gain, lightLinear: s.lightLinear, output: "p38", dither: false }, false);
+    // (View 8: that colour itself — no look, sharpening or grain after it.)
+    const p: Params = { ...s.params, enable: { ...s.params.enable, dof: false } };
+    const r = await this.renderer.render({ base: t.base, denoised: t.denoised, width: t.w, height: t.h, fullWidth: s.work.width }, s.maps, p, { wb: this.wbFor(p), gain: s.gain, lightLinear: s.lightLinear, output: "p38", dither: false, debugView: 8 }, false);
     const px = new Uint8Array(await this.gpu.readTexture(r.tex, 0, 0, t.w, t.h, 4));
     const tx = Math.round(x * (t.w - 1)), ty = Math.round(y * (t.h - 1));
     const labs: Array<[number, number, number]> = [];

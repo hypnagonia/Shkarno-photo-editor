@@ -18,7 +18,7 @@ import { AUTO_LAYERS_VERSION } from "./layers/auto.ts";
 import { histogramOf } from "./analysis/previewHist.ts";
 import { applyAutoCurves, type AutoCurveBands } from "./decision/autoCurves.ts";
 import { isFlat } from "./render/curves.ts";
-import { consumeCrash, crashInfo, crashedInAnalysis, crashedWhileProcessing, forgetPendingParams, lastStage, markCompleted, markInflight, noteAnalysis, noteStage, rememberParams, rememberPhoto, restorablePhoto } from "./ui/session.ts";
+import { consumeCrash, crashInfo, crashedInAnalysis, crashedWhileProcessing, forgetPendingParams, lastStage, markCompleted, markInflight, noteAnalysis, noteStage, rememberParams, rememberPhoto, forgetPhoto, restorablePhoto } from "./ui/session.ts";
 import { LANGS, LANG_NAMES, lang, setLang, storedLang, t, tOr, type Lang } from "./ui/i18n.ts";
 import { el } from "./ui/dom.ts";
 import { autotestAllowed } from "./autotest.ts";
@@ -299,6 +299,8 @@ let autoDof = (() => { try { return localStorage.getItem("autoDof") === "1"; } c
 let upscaleMode: UpscaleMode = (() => { try { const v = localStorage.getItem("upscaleMode"); return v === "always" || v === "off" ? v : "auto"; } catch { return "auto"; } })();
 /** The open photo (for "back to original size", which reopens it at 1×). */
 let currentFile: File | undefined;
+/** …and the series it was merged with (reopens merge it again). */
+let currentSeries: { files: File[]; ref?: number } | undefined;
 /** The page died while processing: don't retry automatically — offer a lighter reopen. */
 /** Scene analysis crashed this device before (the page died during segmentation or depth): it runs on the CPU from now on. */
 const SAFE_ANALYSIS = "safeAnalysis";
@@ -368,6 +370,7 @@ function openFile(f: File, restore?: Params, upscaleOverride?: UpscaleMode, seri
   pendingRestore = restore;
   upscale = undefined;
   currentFile = f;
+  currentSeries = series;
   // A new photo starts unzoomed, with the normal preview resolution.
   zoom = 1; panX = 0; panY = 0;
   canvas.style.transform = "";
@@ -377,7 +380,7 @@ function openFile(f: File, restore?: Params, upscaleOverride?: UpscaleMode, seri
   // there must not leave the new photo at the zoomed size.
   if (sentPreviewLong) { sentPreviewLong = 0; send({ type: "preview-zoom", long: basePreviewLong() }); }
   renderUpscale();
-  if (!restore) void rememberPhoto(f);
+  if (series) forgetPhoto(); else if (!restore) void rememberPhoto(f);
   markInflight();
   empty.style.display = "none";
   canvas.style.display = "block";
@@ -538,7 +541,9 @@ function maxZoom() { return Math.max(16, 4 * pixelZoom()); }
 /** The zoom at which one photo pixel is one screen pixel (100 %). */
 function pixelZoom() {
   const st = stage.getBoundingClientRect();
-  const long = Math.max(summary?.working.width ?? dispW(), summary?.working.height ?? dispH());
+  // (After the 2× stage the working image is twice the size the analysis reported.)
+  const up = upscale?.upscaleApplied && upscale.width && upscale.height ? upscale : undefined;
+  const long = up ? Math.max(up.width!, up.height!) : Math.max(summary?.working.width ?? dispW(), summary?.working.height ?? dispH());
   const fit = Math.min(st.width / (dispW() || 1), st.height / (dispH() || 1)) * Math.max(dispW(), dispH()) * (window.devicePixelRatio || 1);
   return long / Math.max(1, fit);
 }
@@ -1074,7 +1079,7 @@ const dofReason = el("p", { class: "muted" });
 // This photo opened without a depth map (analysis failed, or a crash taught this device to skip it).
 const noDepthText = el("p", { class: "muted" });
 const retryDepth = el("button", { class: "btn small", text: t("dof.retryDepth") });
-retryDepth.onclick = () => { resetAnalysisLevel(); if (currentFile) openFile(currentFile, params ? structuredClone(params) : undefined); };
+retryDepth.onclick = () => { resetAnalysisLevel(); if (currentFile) openFile(currentFile, params ? structuredClone(params) : undefined, undefined, currentSeries); };
 const noDepthBox = el("div", { class: "no-depth", hidden: "" }, el("div", { class: "group-title", text: t("dof.noDepth") }), noDepthText, el("div", { class: "actions" }, retryDepth));
 depthPane.append(noDepthBox);
 depthPane.append(
@@ -1420,7 +1425,7 @@ const upFacts = el("dl", { class: "kv" });
 const upNow = el("button", { class: "btn primary", text: t("upt.runNow") });
 upNow.onclick = () => { if (upscale) { markInflight(); send({ type: "upscale-now" }); } };
 const upRevert = el("button", { class: "btn", text: t("upt.revert") });
-upRevert.onclick = () => { if (currentFile && params) openFile(currentFile, structuredClone(params), "off"); };
+upRevert.onclick = () => { if (currentFile && params) openFile(currentFile, structuredClone(params), "off", currentSeries); };
 const upModeNote = el("p", { class: "muted" });
 upscalePane.append(
   upStatus,
@@ -1437,7 +1442,7 @@ function renderUpscale() {
   upStatus.textContent = u ? upscaleText(u) : currentFile ? t("up.pending") : t("upt.none");
   upModeNote.textContent = t(upscaleMode === "auto" ? "upt.noteAuto" : upscaleMode === "always" ? "upt.noteAlways" : "upt.noteOff");
   const idle = !!u && (u.state === "skipped" || u.state === "failed" || u.state === "cancelled");
-  upNow.hidden = !idle || u!.code === "memory";
+  upNow.hidden = !idle || u!.code === "memory" || !!seriesInfo; // a merged series has no 2× stage
   upRevert.hidden = u?.state !== "applied";
   upFacts.replaceChildren();
   if (!u) return;
@@ -1567,6 +1572,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
     case "series":
       seriesInfo = m.info;
       renderSeries();
+      renderUpscale();
       break;
     case "upscale":
       upscale = m.info;
