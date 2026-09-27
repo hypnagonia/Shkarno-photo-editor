@@ -530,7 +530,18 @@ window.addEventListener("resize", () => applyZoom());
 // transformed with CSS; once the gesture settles the preview is re-rendered at
 // a higher resolution so the zoomed view is real detail, not enlarged pixels.
 let zoom = 1, panX = 0, panY = 0;
-const MAX_ZOOM = 8;
+/**
+ * Deepest zoom: 4 screen pixels per photo pixel (pixel-peeping), at least 16×.
+ * Zoom 1 = the photo fitted to the stage.
+ */
+function maxZoom() { return Math.max(16, 4 * pixelZoom()); }
+/** The zoom at which one photo pixel is one screen pixel (100 %). */
+function pixelZoom() {
+  const st = stage.getBoundingClientRect();
+  const long = Math.max(summary?.working.width ?? dispW(), summary?.working.height ?? dispH());
+  const fit = Math.min(st.width / (dispW() || 1), st.height / (dispH() || 1)) * Math.max(dispW(), dispH()) * (window.devicePixelRatio || 1);
+  return long / Math.max(1, fit);
+}
 const pointers = new Map<number, { x: number; y: number }>();
 let pinch: { d0: number; z0: number; cx0: number; cy0: number; px0: number; py0: number } | undefined;
 /** The current one-finger gesture: where it started, whether it became a pan. */
@@ -552,7 +563,9 @@ function applyZoom() {
   renderRings();
   clearTimeout(zoomTimer);
   zoomTimer = window.setTimeout(() => {
-    const cap = isPhone() ? 2560 : 4096;
+    // Deep zoom: the photo's full resolution where memory allows (phones: ≈ 7 MP previews).
+    const long = Math.max(summary?.working.width ?? 0, summary?.working.height ?? 0);
+    const cap = isPhone() ? 3072 : Math.max(4096, Math.min(8192, long));
     // Two steps only (not one size per zoom level): every size is a new proxy and render targets.
     const want = Math.round(zoom > 2.2 ? cap : zoom > 1.2 ? Math.min(cap, basePreviewLong() * 1.8) : basePreviewLong());
     if (params && Math.abs(want - sentPreviewLong) > 64) { sentPreviewLong = want; send({ type: "preview-zoom", long: want }); }
@@ -562,7 +575,7 @@ function applyZoom() {
 function zoomAt(z: number, clientX: number, clientY: number) {
   const st = stage.getBoundingClientRect();
   const fx = clientX - (st.left + st.width / 2), fy = clientY - (st.top + st.height / 2);
-  const z1 = Math.min(MAX_ZOOM, Math.max(1, z));
+  const z1 = Math.min(maxZoom(), Math.max(1, z));
   panX = fx - (fx - panX) * (z1 / zoom);
   panY = fy - (fy - panY) * (z1 / zoom);
   zoom = z1;
@@ -633,7 +646,7 @@ stage.addEventListener("pointermove", (e) => {
     const d = Math.hypot(p1.x - p2.x, p1.y - p2.y);
     const st = stage.getBoundingClientRect();
     const scx = st.left + st.width / 2, scy = st.top + st.height / 2;
-    const z1 = Math.min(MAX_ZOOM, Math.max(1, pinch.z0 * d / pinch.d0));
+    const z1 = Math.min(maxZoom(), Math.max(1, pinch.z0 * d / pinch.d0));
     // The photo point under the fingers' first midpoint follows their current midpoint.
     const c0x = pinch.cx0 - scx, c0y = pinch.cy0 - scy;
     panX = ((p1.x + p2.x) / 2 - scx) - (c0x - pinch.px0) * (z1 / pinch.z0);
@@ -704,11 +717,11 @@ function pointerEnd(e: PointerEvent) {
     return;
   }
   if (focusMode) return;
-  // Double-tap: zoom in to 2.5× there, or back out.
+  // Double-tap: zoom in to 100 % (one photo pixel per screen pixel, at least 2.5×) there, or back out.
   const now = performance.now();
   if (now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
     lastTap.t = 0;
-    if (zoom > 1) resetZoom(); else zoomAt(2.5, e.clientX, e.clientY);
+    if (zoom > 1) resetZoom(); else zoomAt(Math.max(2.5, pixelZoom()), e.clientX, e.clientY);
   } else lastTap = { t: now, x: e.clientX, y: e.clientY };
 }
 stage.addEventListener("pointerup", pointerEnd);

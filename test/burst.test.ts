@@ -81,3 +81,23 @@ test("burst: exposure ratio, noise and sharpness from scans", () => {
   const blurred: Plane = { ...ref, d: ref.d.map((_, i) => { const x = i % 200, y = Math.floor(i / 200); return (bilinear(ref, x - 0.5, y) + bilinear(ref, x + 0.5, y) + bilinear(ref, x, y - 0.5) + bilinear(ref, x, y + 0.5)) / 4; }) };
   assert.ok(sharpness(ref) > sharpness(blurred), "the unblurred frame is sharper");
 });
+
+test("burst align: another lens (a 2.1× longer view, no EXIF) is scaled and aligned", async () => {
+  const { searchScale, resamplePlane, fitGlobal: fit, coveredTiles } = await import("../src/burst/align.ts");
+  const W = 768, H = 576, z = 2.1, fw = 800, fh = 600;
+  const ref = scene(W, H);
+  // The tele frame: the centre of the view, z frame pixels per reference pixel, shifted by (5, −3) reference px.
+  const tele = scene(fw, fh, (x, y) => [W / 2 + (x + 0.5 - fw / 2) / z - 0.5 + 5, H / 2 + (y + 0.5 - fh / 2) / z - 0.5 - 3]);
+  const diagRatio = Math.hypot(fw, fh) / Math.hypot(W, H);
+  const sq = (p: Plane) => ({ ...p, d: p.d.map((v) => Math.sqrt(v)) });
+  const sF = searchScale(sq(ref), tele, 1, diagRatio);
+  const s0 = sF * diagRatio;
+  assert.ok(Math.abs(Math.log2(s0 / z)) < 0.2, `search: ${s0.toFixed(3)} (want ${z})`);
+  const base = resamplePlane(tele, W, H, { a: s0, b: 0, tx: 0, ty: 0 });
+  const pr = pyramid(sq(ref));
+  const f = alignTiles(pr, pyramid(sq(base)));
+  const mask = texturedTiles(pr[0], f, 0.01).map((v, i) => v & coveredTiles(base, f)[i]);
+  const m = fit(f, W, H, mask);
+  const scale = s0 * Math.hypot(m.a, m.b), rot = Math.atan2(m.b, m.a) * 180 / Math.PI;
+  assert.ok(Math.abs(scale - z) < 0.02 && Math.abs(rot) < 0.1, `scale ${scale.toFixed(3)} rotation ${rot.toFixed(2)}°`);
+});

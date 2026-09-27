@@ -8,7 +8,7 @@ import { t } from "./i18n.ts";
 import { isPhone } from "../device.ts";
 
 /** Most frames merged: phone memory and time (each frame is developed twice). */
-export const maxFrames = () => (isPhone() ? 8 : 16);
+export const maxFrames = () => (isPhone() ? 12 : 24);
 
 /** `n` of the files, evenly spread over the series (the first and last kept). */
 export function spread<T>(files: T[], n: number): T[] {

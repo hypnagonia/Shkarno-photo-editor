@@ -13,6 +13,47 @@ export interface Plane { w: number; h: number; d: Float32Array }
 export interface Flow { tw: number; th: number; tile: number; dx: Float32Array; dy: Float32Array; err: Float32Array }
 /** x' = a·x − b·y + tx, y' = b·x + a·y + ty (about the image centre, in scan pixels): shift, rotation, scale. */
 export interface Similarity { a: number; b: number; tx: number; ty: number }
+/**
+ * Where a pixel of one image is in another (possibly of another size, another lens):
+ * q − c_dst = [a −b; b a]·(p − c_src) + t, with c = each image's centre.
+ */
+export type Affine = Similarity;
+
+/** The same mapping in other units: the source measured ×ks, the destination ×kd. */
+export const rescale = (m: Affine, ks: number, kd: number): Affine => ({ a: (m.a * kd) / ks, b: (m.b * kd) / ks, tx: m.tx * kd, ty: m.ty * kd });
+/** Scale of a mapping (destination pixels per source pixel). */
+export const scaleOf = (m: Affine) => Math.hypot(m.a, m.b);
+
+/**
+ * `src` resampled into a w×h image: out(p) = src(m(p)). Pixels that fall outside
+ * `src` are −1 (not covered: another lens sees less). When `src` is sampled
+ * sparsely (a longer lens), 3×3 samples are averaged instead of one.
+ */
+export function resamplePlane(src: Plane, w: number, h: number, m: Affine): Plane {
+  const d = new Float32Array(w * h);
+  const sc = scaleOf(m), k = sc > 1.5 ? 1 : 0, step = sc / 3;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const u = x + 0.5 - w / 2, v = y + 0.5 - h / 2;
+    const X = src.w / 2 + m.a * u - m.b * v + m.tx, Y = src.h / 2 + m.b * u + m.a * v + m.ty;
+    if (X < 0 || Y < 0 || X > src.w || Y > src.h) { d[y * w + x] = -1; continue; }
+    let s = 0, n = 0;
+    for (let j = -k; j <= k; j++) for (let i = -k; i <= k; i++) { s += bilinear(src, X - 0.5 + i * step, Y - 0.5 + j * step); n++; }
+    d[y * w + x] = s / n;
+  }
+  return { w, h, d };
+}
+
+/** Tiles every pixel of which is covered (no −1 from resamplePlane). */
+export function coveredTiles(p: Plane, f: Flow): Uint8Array {
+  const out = new Uint8Array(f.tw * f.th);
+  for (let i = 0; i < out.length; i++) {
+    const [cx, cy] = centre(f, i, p.w, p.h);
+    let ok = 1;
+    for (let y = cy - TILE / 2; y < cy + TILE / 2 && ok; y += 3) for (let x = cx - TILE / 2; x < cx + TILE / 2; x += 3) if (at(p, x, y) < 0) { ok = 0; break; }
+    out[i] = ok;
+  }
+  return out;
+}
 
 export const TILE = 16;
 
@@ -259,7 +300,7 @@ export function scanNoise(ref: Plane, aligned: Plane[], bins = 8): number[] {
   const acc: number[][] = Array.from({ length: bins }, () => []);
   for (const a of aligned) for (let i = 0; i < ref.d.length; i += 2) {
     const y = ref.d[i];
-    if (y <= 0 || y >= 0.95) continue;
+    if (y <= 0 || y >= 0.95 || a.d[i] < 0) continue; // (−1: not covered by that frame)
     const b = Math.min(bins - 1, Math.floor(Math.sqrt(y) * bins));
     acc[b].push(Math.abs(a.d[i] - y));
   }
@@ -271,4 +312,40 @@ export function scanNoise(ref: Plane, aligned: Plane[], bins = 8): number[] {
     out[i] = Number.isFinite(out[i - k] ?? NaN) ? out[i - k] : Number.isFinite(out[i + k] ?? NaN) ? out[i + k] : 0.002;
   }
   return out;
+}
+
+const sqrtPlane = (p: Plane, g: number): Plane => ({ w: p.w, h: p.h, d: p.d.map((v) => Math.sqrt(Math.max(0, v * g))) });
+const median = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
+const both = (a: Uint8Array, b: Uint8Array) => a.map((v, i) => v & b[i]);
+
+/**
+ * The field-of-view ratio of a frame to the reference when EXIF does not say which
+ * lens (`sF`, as the ratio of 35 mm focal lengths). Scales from ¼× to 4× are tried
+ * on half-size scans: each gets tile alignment and a global fit (which also corrects
+ * a scale that is only roughly right), and is judged by how well the whole covered
+ * view then matches — per-tile errors alone cannot tell, since every tile of smooth
+ * content matches at some shift.
+ */
+export function searchScale(ref: Plane, frame: Plane, g: number, diagRatio: number): number {
+  // `ref`: √-luma scan; searched at half its size (a half-size pixel spans 2 of the scan's).
+  const refHalf = half(ref);
+  const refPyr = pyramid(refHalf, 3);
+  const grid = { tw: Math.ceil(refHalf.w / TILE), th: Math.ceil(refHalf.h / TILE), tile: TILE, dx: new Float32Array(0), dy: new Float32Array(0), err: new Float32Array(0) };
+  const tex = texturedTiles(refHalf, grid, 0.01);
+  let best = 1, bestErr = Infinity;
+  for (let k = -8; k <= 8; k++) {
+    const s0 = 2 * 2 ** (k / 4) * diagRatio;
+    const base = resamplePlane(frame, refHalf.w, refHalf.h, { a: s0, b: 0, tx: 0, ty: 0 });
+    const f = alignTiles(refPyr, pyramid(sqrtPlane(base, g), 3));
+    const m = both(tex, coveredTiles(base, f));
+    if (m.reduce((a, v) => a + v, 0) < m.length * 0.05) continue;
+    const g1 = fitGlobal(f, refHalf.w, refHalf.h, m);
+    const total: Affine = { a: s0 * g1.a, b: s0 * g1.b, tx: s0 * g1.tx, ty: s0 * g1.ty };
+    const check = resamplePlane(frame, refHalf.w, refHalf.h, total);
+    let e = 0, n = 0;
+    for (let i = 0; i < check.d.length; i += 3) if (check.d[i] >= 0) { e += Math.abs(Math.sqrt(Math.max(0, check.d[i] * g)) - refHalf.d[i]); n++; }
+    if (n < check.d.length / 3 * 0.05) continue;
+    if (e / n < bestErr) { bestErr = e / n; best = scaleOf(total) / (2 * diagRatio); }
+  }
+  return best;
 }

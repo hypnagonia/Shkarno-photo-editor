@@ -4,6 +4,8 @@
 //   luma        frame → √(g·Y), the alignment image (noise roughly even in it)
 //   align       per 16 px tile: search ±2 px around the coarse guess (from the
 //               ≈1024 px scan), then one Lucas–Kanade step for the sub-pixel part
+//   resample    a frame from another lens → the reference's view (colour matched;
+//               what it does not cover is marked like clipped: never added)
 //   init        reference → accumulator (mean = reference, weight 1)
 //   weights     per pixel: how much this frame may add (0 where it disagrees with
 //               the mean beyond noise — something moved — or is clipped)
@@ -21,6 +23,9 @@ struct U {
   n: f32,        // frames in the series
   mode: u32,     // finalize: 1 = mix the denoised image into ghost areas
   sig0: vec4<f32>, sig1: vec4<f32>, // noise σ (linear) per √Y bin, 8 bins
+  aff: vec4<f32>,  // another lens: reference → frame pixels, q − c_f = [a −b; b a](p − c_r) + t
+  fsize: vec4<f32>, // that frame's size
+  gc: vec4<f32>,   // its colour gains (rgb) and weight (a)
 }
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var frame: texture_2d<f32>;
@@ -155,8 +160,8 @@ fn weight_at(px: i32, py: i32) -> f32 {
   let t = dot(d, d) / 3.0 / s2;
   // Within ~1.7σ: full weight; beyond, falling fast (a moving thing, a misalignment).
   let w = exp(-max(0.0, t - 3.0) * 0.5);
-  // A frame scaled up (darker) carries more noise.
-  return w * clamp(1.0 / (u.g * u.g), 0.25, 4.0);
+  // A frame scaled up (darker) carries more noise; a wider lens's frame, less detail.
+  return w * clamp(1.0 / (u.g * u.g), 0.25, 4.0) * u.gc.w;
 }
 
 @compute @workgroup_size(8, 8)
@@ -182,6 +187,23 @@ fn accumulate(@builtin(global_invocation_id) id: vec3<u32>) {
   if (m.w < 0.0) { m = vec4<f32>(x, w); }
   else { let W = m.w + w; m = vec4<f32>(m.rgb + (x - m.rgb) * (w / W), W); }
   acc[i] = vec2<u32>(pack2x16float(m.rg), pack2x16float(m.ba));
+}
+
+@compute @workgroup_size(8, 8)
+fn resample(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x >= u.w || id.y >= u.h) { return; }
+  let p = vec2<f32>(vec2<u32>(id.xy)) + 0.5 - vec2<f32>(f32(u.w), f32(u.h)) * 0.5;
+  let q = u.fsize.xy * 0.5 + vec2<f32>(u.aff.x * p.x - u.aff.y * p.y, u.aff.y * p.x + u.aff.x * p.y) + u.aff.zw;
+  if (any(q < vec2<f32>(0.0)) || any(q > u.fsize.xy)) { textureStore(out, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0)); return; }
+  // A longer lens is sampled sparsely: 3×3 samples averaged (no aliasing).
+  let sc = length(u.aff.xy);
+  var c = vec4<f32>(0.0);
+  if (sc > 1.5) {
+    let st = sc / 3.0;
+    for (var j = -1; j <= 1; j++) { for (var i = -1; i <= 1; i++) { c += textureSampleLevel(frame, samp, (q + vec2<f32>(f32(i), f32(j)) * st) / u.fsize.xy, 0.0); } }
+    c = c / 9.0;
+  } else { c = textureSampleLevel(frame, samp, q / u.fsize.xy, 0.0); }
+  textureStore(out, vec2<i32>(id.xy), vec4<f32>(c.rgb * u.gc.rgb, c.a));
 }
 
 @compute @workgroup_size(8, 8)

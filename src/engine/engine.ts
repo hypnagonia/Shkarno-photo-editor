@@ -990,7 +990,7 @@ export class Engine {
   }
 
   setPreviewSize(long: number) {
-    this.previewLong = Math.max(512, Math.min(4096, Math.round(long)));
+    this.previewLong = Math.max(512, Math.min(isMobile() ? 3072 : Math.min(8192, this.gpu?.info.maxTextureDimension2D ?? 8192), Math.round(long)));
   }
 
   /** Zooming into the preview: rebuild it at a higher resolution (or back down). Call inside `exclusive`. */
