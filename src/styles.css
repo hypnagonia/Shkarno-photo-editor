@@ -480,16 +480,3 @@ header.top .push { margin-left: auto; }
   background: #d9a400; color: #000; font-weight: bold; pointer-events: none; }
 .check-badge.bad { background: var(--danger); color: #fff; }
 .check-fix.solving { color: var(--muted); font-style: italic; }
-
-/* Camera looks: a grid of tiles (maker, model · style, lens). */
-.cam-parts { margin: 2px 0 10px; }
-.cam-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
-.cam-tile { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; padding: 9px 10px; border: 1px solid var(--line);
-  background: transparent; text-align: left; transition: background .12s, border-color .12s; }
-.cam-tile.on { border-color: var(--text); background: var(--panel-2); box-shadow: inset 3px 0 0 var(--text); }
-.cam-tile:active { background: var(--panel-2); }
-.cam-tile > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cam-maker { font-weight: bold; font-size: 13px; }
-.cam-model { font-size: 12px; color: var(--soft); }
-.cam-lens { font-size: 11px; color: var(--muted); }
-@media (min-width: 900px) { .cam-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

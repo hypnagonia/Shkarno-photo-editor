@@ -25,7 +25,6 @@ import { forcePhone, isPhone } from "./device.ts";
 import type { AnalysisLevel } from "./neural/scene.ts";
 import type { ColorStats } from "./looks/palette.ts";
 import type { CheckItem } from "./analysis/check.ts";
-import { ALL_PARTS, CAMERA_LOOKS, applyCameraLook, type CameraLook, type CameraParts } from "./looks/cameras.ts";
 import { installTouchSliders } from "./ui/touchSlider.ts";
 import { makeLayer } from "./layers/model.ts";
 
@@ -147,8 +146,6 @@ const checkPane = addPane("check");
 /** Develop: the RAW development (exposure, tone, colour, detail). Blur: depth of field, its own card. */
 const developEl = el("div", { class: "develop" }, adjustPane);
 const blurEl = el("div", { class: "develop" }, depthPane);
-/** Camera: camera looks (src/looks/cameras.ts) — colour, lens and sensor of a well-known camera. */
-const cameraEl = el("div", { class: "develop camera-pane" });
 autoPane.append(el("p", { class: "muted", text: t("auto.hint") }));
 
 // --------------------------------------------------------------------------- state
@@ -944,7 +941,6 @@ const layersPanel = createLayersPanel(dockEl, propsEl, {
   showMask: (i) => { maskIndex = i; send(baseView()); },
   develop: developEl,
   blur: blurEl,
-  camera: cameraEl,
   photoColors: () => new Promise<string[]>((resolve) => {
     paletteWaiters.push((s) => resolve(s.palette.map((w) => w.hex)));
     send({ type: "palette" });
@@ -1252,53 +1248,6 @@ function renderCheck() {
   }
 }
 
-// Camera looks: one tap renders the photo the way a well-known camera and lens would
-// (colour science, lens blur and vignette, sensor grain / sharpening); each part can be
-// switched off. Everything it sets stays editable in Develop and Blur.
-let photoNoDepth = false;
-let cameraParts: CameraParts = { ...ALL_PARTS };
-function renderCamera() {
-  const cur = params?.camera;
-  if (cur) cameraParts = { colour: cur.colour, lens: cur.lens, sensor: cur.sensor };
-  const apply = (look: CameraLook | undefined) => {
-    if (!params || !autoParams) return;
-    applyCameraLook(params, autoParams, look, cameraParts, photoNoDepth);
-    nextLabel = t("cam.applied", { name: look ? `${look.maker} ${look.model} · ${look.style}` : t("cam.none") });
-    syncControls();
-    pushParams();
-  };
-  const tile = (look: CameraLook | undefined) => {
-    const on = (cur?.id ?? "") === (look?.id ?? "");
-    const b = el("button", { class: "cam-tile" + (on ? " on" : "") },
-      el("span", { class: "cam-maker", text: look ? look.maker : t("cam.none") }),
-      el("span", { class: "cam-model", text: look ? `${look.model} · ${look.style}` : t("cam.noneSub") }),
-      el("span", { class: "cam-lens", text: look ? look.lens.name : "" }));
-    b.onclick = () => apply(look);
-    b.disabled = !params;
-    return b;
-  };
-  const part = (k: keyof CameraParts, label: string) => {
-    const b = el("button", { class: "chip" + (cameraParts[k] ? " on" : ""), text: label });
-    b.onclick = () => { cameraParts = { ...cameraParts, [k]: !cameraParts[k] }; const look = CAMERA_LOOKS.find((l) => l.id === params?.camera?.id); if (look) apply(look); else renderCamera(); };
-    return b;
-  };
-  const looks = el("div", { class: "cam-grid" }, tile(undefined), ...CAMERA_LOOKS.map(tile));
-  const kids: HTMLElement[] = [
-    el("p", { class: "muted", text: t("cam.hint") }),
-    el("div", { class: "chips cam-parts" }, part("colour", t("cam.colour")), part("lens", t("cam.lens")), part("sensor", t("cam.sensor"))),
-  ];
-  if (cur && cameraParts.lens && photoNoDepth) kids.push(el("p", { class: "muted", text: t("cam.noDepth") }));
-  kids.push(looks);
-  if (cur?.colour && params) {
-    const s = el("input", { type: "range", min: "0", max: "1", step: "0.01", value: String(params.profile.intensity ?? 1) });
-    const out = el("output", { text: `${Math.round((params.profile.intensity ?? 1) * 100)}%` });
-    s.oninput = () => { if (!params) return; params.profile.intensity = +s.value; out.textContent = `${Math.round(+s.value * 100)}%`; nextLabel = t("cam.strength"); pushParams(); };
-    kids.push(el("div", { class: "row" }, el("label", { text: t("cam.strength") }), s, out));
-  }
-  cameraEl.replaceChildren(...kids);
-}
-renderCamera();
-
 // Export
 const fmtSel = el("select", {}, el("option", { value: "jpeg", text: "JPEG" }), el("option", { value: "jpeg-hdr", text: t("exp.jpegHdr") }), el("option", { value: "heic", text: "HEIC" }), el("option", { value: "tiff16", text: t("exp.tiff") }), el("option", { value: "dng", text: t("exp.dng") }));
 const spaceSel = el("select", {}, el("option", { value: "p3", text: "Display P3" }), el("option", { value: "srgb", text: "sRGB" }));
@@ -1463,7 +1412,6 @@ function renderAuto() {
 }
 
 function syncControls() {
-  renderCamera();
   sliders.forEach(refreshSlider);
   layersPanel.render();
   renderLooks();
@@ -1591,7 +1539,6 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       aeNote.textContent = exposureSuggestion ? t("adj.suggests", { ev: `${exposureSuggestion > 0 ? "+" : ""}${exposureSuggestion.toFixed(2)}` }) : t("adj.noCorrection");
       // The reason itself comes from the decision engine and stays in English.
       noDepthBox.hidden = !m.noDepth;
-      photoNoDepth = !!m.noDepth;
       noDepthText.textContent = m.noDepth ?? "";
       dofReason.textContent = t("dof.reason", { d: m.dof.focus.toFixed(2) }) + (m.dof.justified ? t("dof.suggested") : t("dof.notSuggested")) + m.dof.reason;
       syncControls();
