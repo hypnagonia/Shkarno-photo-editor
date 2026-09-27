@@ -472,3 +472,6 @@ header.top .push { margin-left: auto; }
 .check-fix { font-size: 12px; color: var(--soft); margin-top: 4px; }
 .check-fix::before { content: "→ "; }
 .check-item.where .check-title::after { content: " ◉"; color: var(--muted); font-weight: normal; }
+.check-fix { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.check-fix > span { flex: 1; min-width: 60%; }
+.check-fix .btn { flex: none; }

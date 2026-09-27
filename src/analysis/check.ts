@@ -12,6 +12,7 @@
  */
 import { linSrgbToOklab } from "../color/oklab.ts";
 import { srgbEotf } from "../color/transfer.ts";
+import type { FixChange } from "./checkFix.ts";
 
 export interface CheckImage { rgba: Uint8Array; w: number; h: number }
 export interface CheckInput {
@@ -28,6 +29,16 @@ export interface CheckItem {
   v: Record<string, number | string>;
   /** Where (1 = here), at the image size; only for findings that are not ok. */
   mask?: Uint8Array;
+  /** What fixes it, worked out by re-rendering (engine): control values or a layer's opacity. */
+  fix?: FixChange[];
+  /** The fix only makes it better, not fine. */
+  fixPartial?: boolean;
+  /**
+   * How far from a comfortable result (> 0: needs fixing, ≤ 0: comfortably fine),
+   * signed so that moving the right control crosses zero once: what the fix
+   * solver bisects. Absent for findings no control is solved for.
+   */
+  err?: number;
 }
 
 /** Linear Display P3 → linear sRGB (as P3_TO_SRGB in common.wgsl). */
@@ -99,32 +110,38 @@ function boxMean(src: Float32Array, w: number, h: number, r: number): Float32Arr
   return out;
 }
 
-export function checkPhoto(inp: CheckInput): CheckItem[] {
+export type CheckId = CheckItem["id"];
+/** The Lab planes of a render (computed once, e.g. for the camera's rendering while solving). */
+export type CheckPlanes = Px;
+export const planesOf = (img: CheckImage): CheckPlanes => toLab(img);
+
+export function checkPhoto(inp: CheckInput, only?: CheckId, beforePlanes?: CheckPlanes): CheckItem[] {
   const { w, h } = inp.final;
   const n = w * h;
-  const F = toLab(inp.final), B = toLab(inp.before);
+  const F = toLab(inp.final), B = beforePlanes ?? toLab(inp.before);
+  const want = (id: CheckId) => !only || only === id;
   const items: CheckItem[] = [];
   const mask = () => new Uint8Array(n);
 
   // ---- highlights: blown white (every channel at the top), versus the camera.
-  {
+  if (want("highlights")) {
     const m = mask(); let f = 0, b = 0;
     for (let i = 0; i < n; i++) { if (F.min[i] >= 250) { f++; if (B.min[i] < 250) m[i] = 1; } if (B.min[i] >= 250) b++; }
     const added = f / n - b / n;
     const level: CheckLevel = added > 0.01 ? "bad" : added > 0.003 || f / n > 0.03 ? "warn" : "ok";
-    items.push({ id: "highlights", level, v: { pct: pct(f / n), camera: pct(b / n), where: whereName(m, w, h, inp.seg) }, mask: level === "ok" ? undefined : (added > 0.003 ? m : Uint8Array.from(F.min, (v) => (v >= 250 ? 1 : 0))) });
+    items.push({ id: "highlights", level, err: added - 0.001, v: { pct: pct(f / n), camera: pct(b / n), where: whereName(m, w, h, inp.seg) }, mask: level === "ok" ? undefined : (added > 0.003 ? m : Uint8Array.from(F.min, (v) => (v >= 250 ? 1 : 0))) });
   }
   // ---- shadows: crushed black (every channel at the bottom), versus the camera.
-  {
+  if (want("shadows")) {
     const m = mask(); let f = 0, b = 0;
     for (let i = 0; i < n; i++) { if (F.max[i] <= 4) { f++; if (B.max[i] > 4) m[i] = 1; } if (B.max[i] <= 4) b++; }
     const added = f / n - b / n;
     const level: CheckLevel = added > 0.03 ? "bad" : added > 0.008 ? "warn" : "ok";
-    items.push({ id: "shadows", level, v: { pct: pct(f / n), camera: pct(b / n), where: whereName(m, w, h, inp.seg) }, mask: level === "ok" ? undefined : m });
+    items.push({ id: "shadows", level, err: added - 0.003, v: { pct: pct(f / n), camera: pct(b / n), where: whereName(m, w, h, inp.seg) }, mask: level === "ok" ? undefined : m });
   }
   // ---- colour clipping: a saturated colour with a channel at the end of its range,
   //      in the mid tones (texture gone: flat patches of pure colour).
-  {
+  if (want("colorClip")) {
     const m = mask(); let f = 0, b = 0;
     for (let i = 0; i < n; i++) {
       const clipF = (F.min[i] <= 1 || F.max[i] >= 254) && F.C[i] > 0.12 && F.L[i] > 0.25 && F.L[i] < 0.92;
@@ -134,19 +151,19 @@ export function checkPhoto(inp: CheckInput): CheckItem[] {
     }
     const added = (f - b) / n;
     const level: CheckLevel = added > 0.02 ? "bad" : added > 0.005 ? "warn" : "ok";
-    items.push({ id: "colorClip", level, v: { pct: pct(f / n), camera: pct(b / n), where: whereName(m, w, h, inp.seg) }, mask: level === "ok" ? undefined : m });
+    items.push({ id: "colorClip", level, err: added - 0.002, v: { pct: pct(f / n), camera: pct(b / n), where: whereName(m, w, h, inp.seg) }, mask: level === "ok" ? undefined : m });
   }
   // ---- saturation overall, versus the camera.
-  {
+  if (want("saturation")) {
     let cf = 0, cb = 0, loud = 0;
     const m = mask();
     for (let i = 0; i < n; i++) { cf += F.C[i]; cb += B.C[i]; if (F.C[i] > 0.24 && F.C[i] > B.C[i] * 1.3) { loud++; m[i] = 1; } }
     const ratio = cb > 1e-6 ? cf / cb : 1;
     const level: CheckLevel = ratio > 1.6 || loud / n > 0.08 ? "bad" : ratio > 1.3 || loud / n > 0.03 ? "warn" : ratio < 0.6 ? "warn" : "ok";
-    items.push({ id: "saturation", level, v: { ratio: Math.round(ratio * 100), loud: pct(loud / n) }, mask: level === "ok" ? undefined : m });
+    items.push({ id: "saturation", level, err: ratio < 0.8 ? 0.75 - ratio : Math.max(ratio - 1.2, loud / n - 0.02), v: { ratio: Math.round(ratio * 100), loud: pct(loud / n) }, mask: level === "ok" ? undefined : m });
   }
   // ---- skin: people's skin (people region, skin-like in the camera's rendering) in the final.
-  if (inp.seg?.groups.includes("person")) {
+  if (want("skin") && inp.seg?.groups.includes("person")) {
     let n2 = 0, L = 0, a = 0, b = 0;
     const m = mask();
     for (let y = 0; y < h; y += 1) for (let x = 0; x < w; x += 1) {
@@ -167,7 +184,7 @@ export function checkPhoto(inp: CheckInput): CheckItem[] {
     }
   }
   // ---- colour cast: what was grey / white in the camera's rendering, tinted in the final.
-  {
+  if (want("cast")) {
     let n2 = 0, da = 0, db = 0, ba = 0, bb = 0;
     for (let i = 0; i < n; i += 3) {
       if (B.C[i] < 0.025 && B.L[i] > 0.35 && B.L[i] < 0.95) { n2++; da += F.a[i]; db += F.b[i]; ba += B.a[i]; bb += B.b[i]; }
@@ -178,27 +195,29 @@ export function checkPhoto(inp: CheckInput): CheckItem[] {
       let hue = (Math.atan2(sb, sa) * 180) / Math.PI; if (hue < 0) hue += 360;
       const tint = hue < 30 || hue >= 330 ? "magenta" : hue < 95 ? "warm" : hue < 160 ? "green" : hue < 250 ? "cyan" : "blue";
       const level: CheckLevel = shift > 0.03 ? "bad" : shift > 0.015 ? "warn" : "ok";
-      items.push({ id: "cast", level, v: { tint, amount: Math.round(shift * 1000) } });
+      items.push({ id: "cast", level, err: shift - 0.01, v: { tint, amount: Math.round(shift * 1000) } });
     }
   }
   // ---- exposure: the median brightness, versus the camera.
-  {
+  if (want("exposure")) {
     const med = quantile(F.L, 0.5), cam = quantile(B.L, 0.5);
     const d = med - cam;
     const level: CheckLevel = med < 0.28 || med > 0.86 ? "bad" : med < 0.36 || med > 0.8 || Math.abs(d) > 0.15 ? "warn" : "ok";
-    items.push({ id: "exposure", level, v: { median: Math.round(med * 100), camera: Math.round(cam * 100), dir: med < cam ? "darker" : "brighter" } });
+    // Back to within 0.03 of the camera's median, from whichever side it is.
+    items.push({ id: "exposure", level, err: (med >= cam ? med - cam : cam - med) - 0.03, v: { median: Math.round(med * 100), camera: Math.round(cam * 100), dir: med < cam ? "darker" : "brighter" } });
   }
   // ---- contrast: tonal range, and whether there are real blacks and whites.
-  {
+  if (want("contrast")) {
     const lo = quantile(F.L, 0.005), hi = quantile(F.L, 0.995);
     const span = hi - lo;
     const issue = span < 0.45 ? "flat" : lo > 0.22 ? "noBlack" : hi < 0.72 ? "noWhite" : span > 0.97 && quantile(F.L, 0.05) < 0.08 ? "harsh" : "";
     const level: CheckLevel = issue === "flat" || (issue === "noBlack" && lo > 0.3) ? "bad" : issue ? "warn" : "ok";
-    items.push({ id: "contrast", level, v: { issue, black: Math.round(lo * 100), white: Math.round(hi * 100) } });
+    const cErr = issue === "flat" ? 0.52 - span : issue === "noBlack" ? lo - 0.15 : issue === "noWhite" ? 0.78 - hi : issue === "harsh" ? span - 0.95 : -1;
+    items.push({ id: "contrast", level, err: cErr, v: { issue, black: Math.round(lo * 100), white: Math.round(hi * 100) } });
   }
   // ---- noise: fine grain in flat areas of the camera's rendering, final versus camera.
   //      (Clarity, texture, sharpening and lifted shadows all amplify it.)
-  {
+  if (want("noise")) {
     const hp = (P: Px) => { const s = boxMean(P.L, w, h, 1); const o = new Float32Array(n); for (let i = 0; i < n; i++) o[i] = Math.abs(P.L[i] - s[i]); return o; };
     const hf = hp(F), hb = hp(B);
     const grad = boxMean(hb, w, h, 4);
@@ -211,11 +230,11 @@ export function checkPhoto(inp: CheckInput): CheckItem[] {
     }
     const ratio = k > n * 0.03 && sb > 1e-6 ? sf / sb : 1;
     const level: CheckLevel = ratio > 2.4 ? "bad" : ratio > 1.7 ? "warn" : "ok";
-    items.push({ id: "noise", level, v: { ratio: Math.round(ratio * 10) / 10 }, mask: level === "ok" ? undefined : m });
+    items.push({ id: "noise", level, err: ratio - 1.4, v: { ratio: Math.round(ratio * 10) / 10 }, mask: level === "ok" ? undefined : m });
   }
   // ---- halos: along strong edges, the final overshoots beyond both sides of the edge
   //      as the camera had them (a bright rim on the dark side, a dark rim on the bright).
-  {
+  if (want("halos")) {
     const r = Math.max(2, Math.round(Math.max(w, h) / 256));
     const gx = new Float32Array(n);
     for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
@@ -223,23 +242,24 @@ export function checkPhoto(inp: CheckInput): CheckItem[] {
       gx[i] = Math.hypot(B.L[i + 1] - B.L[i - 1], B.L[i + w] - B.L[i - w]);
     }
     const near = boxMean(Float32Array.from(gx, (g) => (g > 0.18 ? 1 : 0)), w, h, r * 2);
-    // The camera's local range around each pixel (min / max of a (2r+1)² window, approximated by mean ± 2σ).
-    const mB = boxMean(B.L, w, h, r * 2), m2 = boxMean(Float32Array.from(B.L, (v) => v * v), w, h, r * 2);
+    // Compare the edge detail only (each image minus its own local mean), so a photo
+    // made brighter or darker overall is not read as a halo: a halo is detail next to
+    // an edge swinging much further than the camera's did, on the same side.
+    const mF = boxMean(F.L, w, h, r * 2), mB = boxMean(B.L, w, h, r * 2);
     let edge = 0, halo = 0;
     const m = mask();
     for (let i = 0; i < n; i++) {
       if (near[i] < 0.02) continue;
       edge++;
-      const sd = Math.sqrt(Math.max(0, m2[i] - mB[i] * mB[i]));
-      const hiB = mB[i] + 2 * sd, loB = mB[i] - 2 * sd;
-      if ((F.L[i] > hiB + 0.07 && F.L[i] - B.L[i] > 0.08) || (F.L[i] < loB - 0.07 && B.L[i] - F.L[i] > 0.08)) { halo++; m[i] = 1; }
+      const dF = F.L[i] - mF[i], dB = B.L[i] - mB[i];
+      if (Math.abs(dF) > Math.abs(dB) * 1.6 + 0.05 && Math.sign(dF) === Math.sign(dB || dF)) { halo++; m[i] = 1; }
     }
     const share = edge ? halo / edge : 0;
     const level: CheckLevel = share > 0.12 ? "bad" : share > 0.05 ? "warn" : "ok";
-    items.push({ id: "halos", level, v: { pct: pct(share) }, mask: level === "ok" ? undefined : m });
+    items.push({ id: "halos", level, err: share - 0.03, v: { pct: pct(share) }, mask: level === "ok" ? undefined : m });
   }
   // ---- banding: in smooth gradients (sky, walls), visible steps instead of a ramp.
-  {
+  if (want("banding")) {
     const B16 = 16;
     let smooth = 0, banded = 0;
     const m = mask();
@@ -270,7 +290,7 @@ export function checkPhoto(inp: CheckInput): CheckItem[] {
     items.push({ id: "banding", level, v: { pct: pct(share) }, mask: level === "ok" ? undefined : m });
   }
   // ---- vignette: corners versus the centre, final versus camera.
-  {
+  if (want("vignette")) {
     const region = (cx: number, cy: number) => { let s = 0, k = 0; const rw = Math.round(w * 0.12), rh = Math.round(h * 0.12);
       for (let y = Math.max(0, cy - rh); y < Math.min(h, cy + rh); y += 2) for (let x = Math.max(0, cx - rw); x < Math.min(w, cx + rw); x += 2) { s += F.L[y * w + x] - B.L[y * w + x]; k++; }
       return k ? s / k : 0; };
@@ -278,7 +298,7 @@ export function checkPhoto(inp: CheckInput): CheckItem[] {
     const centre = region(Math.round(w / 2), Math.round(h / 2));
     const drop = centre - corners; // how much darker the edit made the corners than the centre
     const level: CheckLevel = drop > 0.18 ? "bad" : drop > 0.1 ? "warn" : "ok";
-    items.push({ id: "vignette", level, v: { drop: Math.round(drop * 100) } });
+    items.push({ id: "vignette", level, err: drop - 0.05, v: { drop: Math.round(drop * 100) } });
   }
   return items;
 }

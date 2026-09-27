@@ -11,7 +11,7 @@ import { createLlmPanel } from "./ui/llmPanel.ts";
 import { normalizeProfile } from "./looks/profile.ts";
 import { createToneCurves } from "./ui/toneCurves.ts";
 import { History as EditHistory } from "./layers/history.ts";
-import { createLayersPanel } from "./ui/editor/layersPanel.ts";
+import { createLayersPanel, layerName } from "./ui/editor/layersPanel.ts";
 import { icon, type IconName } from "./ui/editor/icons.ts";
 import { AUTO_LAYERS_VERSION } from "./layers/auto.ts";
 import { histogramOf } from "./analysis/previewHist.ts";
@@ -1150,6 +1150,49 @@ function checkText(it: CheckItem): string {
   if (it.id === "contrast" && it.v.issue) return tOr(`check.contrast.${it.v.issue}`, "", v);
   return tOr(`check.${it.id}.${it.level}`, "", v);
 }
+/** The controls a fix names: label and how the value reads on its slider. */
+const FIX_LABEL: Record<string, [Parameters<typeof t>[0], (v: number) => string]> = {
+  exposure: ["adj.exposure", (v) => `${v > 0 ? "+" : ""}${v.toFixed(2)}`],
+  "tone.highlights": ["adj.highlights", pctFix], "tone.shadows": ["adj.shadows", pctFix], "tone.whites": ["adj.whites", pctFix],
+  "tone.blacks": ["adj.blacks", pctFix], "tone.contrast": ["adj.contrast", pctFix],
+  "wb.temp": ["adj.temp", (v) => `${Math.round(v)}K`], "wb.tint": ["adj.tint", (v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}`],
+  "local.compression": ["adj.range", pctFix], "local.clarity": ["adj.clarity", pctFix], "local.texture": ["adj.texture", pctFix],
+  "dehaze.strength": ["adj.dehaze", pctFix], "color.vibrance": ["adj.vibrance", pctFix], "color.saturation": ["adj.saturation", pctFix],
+  "denoise.luma": ["adj.noiseLuma", pctFix], "sharpen.amount": ["adj.sharpen", pctFix], "vignette.amount": ["adj.vigAmount", pctFix],
+  autoCurves: ["adj.autoStrength", (v) => `${Math.round(v * 100)}%`],
+};
+function pctFix(v: number) { return `${v > 0 ? "+" : ""}${Math.round(v * 100)}`; }
+/** A finding's fix: the exact change (worked out by the engine) with Apply, or the general advice. */
+function checkFixEl(it: CheckItem): HTMLElement {
+  const box = el("div", { class: "check-fix" });
+  if (!it.fix?.length || !params) { box.textContent = t(`check.${it.id}.fix`); return box; }
+  const lines = it.fix.map((c) => {
+    if ("layer" in c) {
+      const l = params!.layers?.find((x) => x.id === c.layer);
+      const name = l ? layerName(l) : c.name;
+      return t("check.fixLayer", { name, from: `${Math.round(c.from * 100)}%`, to: c.to <= 0 ? t("check.hide") : `${Math.round(c.to * 100)}%` });
+    }
+    const [key, fmt] = FIX_LABEL[c.path] ?? [undefined, (v: number) => v.toFixed(2)];
+    const ev = c.path === "exposure" ? ` (${c.to - c.from > 0 ? "+" : "−"}${Math.abs(c.to - c.from).toFixed(2)} EV)` : "";
+    return `${key ? t(key) : c.path}: ${fmt(c.from)} → ${fmt(c.to)}${ev}`;
+  });
+  const apply = el("button", { class: "btn small", text: t("check.apply") });
+  apply.onclick = (e) => {
+    e.stopPropagation();
+    if (!params) return;
+    for (const c of it.fix!) {
+      if ("layer" in c) { const l = params.layers?.find((x) => x.id === c.layer); if (l) { if (c.to <= 0) l.visible = false; else l.opacity = c.to; } }
+      else setPath(params, c.path, c.to);
+    }
+    nextLabel = t("check.applied", { what: t(`check.t.${it.id}`) });
+    syncControls();
+    pushParams();
+    setTimeout(runCheck, 80); // after the new settings reach the engine
+  };
+  box.append(el("span", { text: (it.fixPartial ? t("check.fixPartial") : t("check.fixSet")) + " " + lines.join(" · ") }), apply);
+  return box;
+}
+
 function renderCheck() {
   checkRun.disabled = false;
   const r = checkResult;
@@ -1164,7 +1207,7 @@ function renderCheck() {
       el("div", { class: "check-body" },
         el("div", { class: "check-title", text: t(`check.t.${it.id}`) }),
         el("div", { class: "check-text", text: checkText(it) }),
-        ...(it.level !== "ok" ? [el("div", { class: "check-fix", text: t(`check.${it.id}.fix`) })] : [])));
+        ...(it.level !== "ok" ? [checkFixEl(it)] : [])));
     if (it.mask) row.onclick = () => { checkShown = checkShown === it.id ? undefined : it.id; renderCheck(); };
     return row;
   }));

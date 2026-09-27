@@ -57,7 +57,8 @@ import { isPhone, phoneForced } from "../device.ts";
 import { levelsByArea, selectionMask } from "../refine/selection.ts";
 import { selectKey, type MaskShape } from "../layers/model.ts";
 import { liveLayers } from "../layers/gpu.ts";
-import { checkPhoto, type CheckItem } from "../analysis/check.ts";
+import { checkPhoto, planesOf, type CheckItem } from "../analysis/check.ts";
+import { getPath, leversFor, setPath, stepOf, type FixChange } from "../analysis/checkFix.ts";
 import { inverse, mul, mulVec } from "../color/mat3.ts";
 import { P3_D65, SRGB, rgbToXYZ } from "../color/spaces.ts";
 import type { Region } from "../decision/params.ts";
@@ -1362,8 +1363,82 @@ export class Engine {
     const p = s.params;
     const final = await read(p, p.enable.dof && p.dof.strength > 0);
     const before = await read(this.cameraParams(), false);
-    const items = checkPhoto({ final: { rgba: final, w: t.w, h: t.h }, before: { rgba: before, w: t.w, h: t.h }, seg: { ...s.scene.seg, groups: GROUPS } });
+    const seg = { ...s.scene.seg, groups: GROUPS };
+    const items = checkPhoto({ final: { rgba: final, w: t.w, h: t.h }, before: { rgba: before, w: t.w, h: t.h }, seg });
+    await this.solveFixes(s, items, seg);
     return { items, rgba: final, w: t.w, h: t.h };
+  }
+
+  /**
+   * For every finding that is not fine: which control, set to what, fixes it. Each
+   * finding measures how far it is from a comfortable result (CheckItem.err, > 0 =
+   * needs fixing); one control at a time (in the order leversFor gives) is bisected,
+   * on renders at 768 px, to where that crosses zero — a comfortable value, not the
+   * edge of "fine". If no control gets there, the layer whose opacity does; failing
+   * that, the control that helps most (a partial fix).
+   */
+  private async solveFixes(s: Session, items: CheckItem[], seg: NonNullable<Parameters<typeof checkPhoto>[0]["seg"]>) {
+    const todo = items.filter((i) => i.level !== "ok" && i.err !== undefined);
+    if (!todo.length) return;
+    const t0 = performance.now();
+    let renders = 0;
+    const t = await this.ensureThumb(768);
+    const src = { base: t.base, denoised: t.denoised, width: t.w, height: t.h, fullWidth: s.work.width };
+    const render = async (p: Params) => {
+      renders++;
+      const r = await this.renderer.render(src, s.maps, p, { wb: this.wbFor(p), gain: s.gain, lightLinear: s.lightLinear, output: "p38", dither: false }, p.enable.dof && p.dof.strength > 0);
+      return { rgba: new Uint8Array(await this.gpu.readTexture(r.tex, 0, 0, t.w, t.h, 4)), w: t.w, h: t.h };
+    };
+    const beforeImg = await render(this.cameraParams());
+    const beforePlanes = planesOf(beforeImg);
+    const errWith = async (id: CheckItem["id"], p: Params) =>
+      checkPhoto({ final: await render(p), before: beforeImg, seg }, id, beforePlanes).find((i) => i.id === id)?.err ?? -1;
+    const base = s.params;
+    for (const it of todo) {
+      const e0 = await errWith(it.id, base);
+      if (e0 <= 0) continue; // comfortable at this size already
+      let best: { change: FixChange; err: number } | undefined;
+      for (const lv of leversFor(it, base)) {
+        const v0 = getPath(base, lv.path);
+        const step = stepOf(lv.path);
+        const at = (v: number) => { const p = structuredClone(base); setPath(p, lv.path, v); return errWith(it.id, p); };
+        // Walk from the current value towards the end in 6 steps to the first comfortable
+        // value (a two-sided target like exposure is passed, not just approached), then
+        // bisect between it and the step before.
+        let prev = v0, found: number | undefined, minE = e0, minV = v0;
+        for (let k = 1; k <= 6; k++) {
+          const v = v0 + ((lv.bound - v0) * k) / 6;
+          const e = await at(v);
+          if (e < minE) { minE = e; minV = v; }
+          if (e <= 0) { found = v; break; }
+          prev = v;
+        }
+        if (found === undefined) {
+          // Not all the way: remember the value that helps most.
+          if (minE < e0 * 0.6 && (!best || minE < best.err)) best = { change: { path: lv.path, from: v0, to: Math.round((Math.round(minV / step) * step) * 1000) / 1000 }, err: minE };
+          continue;
+        }
+        let lo = prev, hi = found;
+        for (let k = 0; k < 5 && Math.abs(hi - lo) > step; k++) { const mid = (lo + hi) / 2; if ((await at(mid)) <= 0) hi = mid; else lo = mid; }
+        let to = Math.round(hi / step) * step;
+        if (Math.sign(to - hi) === Math.sign(v0 - lv.bound)) to -= Math.sign(v0 - lv.bound) * step; // round towards the fixing side
+        it.fix = [{ path: lv.path, from: v0, to: Math.round(to * 1000) / 1000 }];
+        break;
+      }
+      if (it.fix) continue;
+      // No control does it: the layer that does (its opacity; 0 = hide it).
+      const live = liveLayers(base.layers ?? [], base.autoCurves ?? 1, base.enable);
+      for (const L of [...live].reverse()) {
+        const at = (o: number) => { const p = structuredClone(base); p.layers!.find((x) => x.id === L.id)!.opacity = o; return errWith(it.id, p); };
+        if ((await at(0)) > 0) continue;
+        let lo = L.opacity, hi = 0;
+        for (let k = 0; k < 6; k++) { const mid = (lo + hi) / 2; if ((await at(mid)) <= 0) hi = mid; else lo = mid; }
+        it.fix = [{ layer: L.id, name: L.name, from: L.opacity, to: Math.floor(hi * 20) / 20 }];
+        break;
+      }
+      if (!it.fix && best) { it.fix = [best.change]; it.fixPartial = true; }
+    }
+    this.log(`check fixes: ${todo.length} findings, ${renders} renders at ${t.w}×${t.h}, ${Math.round(performance.now() - t0)} ms`);
   }
 
   async palette(): Promise<ColorStats> {
