@@ -31,7 +31,7 @@ import type { AnalysisReport } from "../analysis/types.ts";
 import { decide, type DecisionResult } from "../decision/engine.ts";
 import { autoFocus, objectDepthRange } from "../decision/focus.ts";
 import { buildAutoLayers } from "../layers/auto.ts";
-import { embeddedPreviewPixels, embeddedPreviewStats, MEDIAN, REF_QS, renderedChroma, renderedQuantiles, shadowMatch } from "../decode/preview.ts";
+import { embeddedPreviewPixels, embeddedPreviewStats, HI_QS, MEDIAN, REF_QS, chromaStats, renderedQuantiles, shadowMatch } from "../decode/preview.ts";
 import { displayQuantiles } from "../decision/autoCurves.ts";
 import { allMask, makeLayer } from "../layers/model.ts";
 import { depthZones } from "../decision/zones.ts";
@@ -99,7 +99,7 @@ interface Session {
    * final previews are measured and the automatic exposure corrected (≤ 2 rounds),
    * unless the exposure was changed by then.
    */
-  calib?: { ref: number[]; rounds: number; black: boolean; chroma?: number; color?: boolean };
+  calib?: { ref: number[]; refHi?: number[]; rounds: number; black: boolean; chroma?: number; chroma95?: number; color?: boolean };
   /** Preview proxy. `owned` is false when it aliases the working textures (image ≤ preview size). */
   proxy?: { base: GPUTexture; denoised: GPUTexture; w: number; h: number; owned: boolean };
   /** Quarter-pixel proxy used while a slider is being dragged. */
@@ -511,7 +511,7 @@ export class Engine {
     const A = decision.params.dehaze.light.map((v) => srgbEotf(v) / gain) as [number, number, number];
 
     const s: Session = { name: file.name, file, decoded, work, denoised: work.tex, gain, scene, maps, report, decision, params, lightLinear: A, scale: 1, skin: skinTex };
-    if (reference && autoExposure) s.calib = { ref: reference.q, rounds: 0, black: false, chroma: reference.chroma };
+    if (reference && autoExposure) s.calib = { ref: reference.q, refHi: reference.qHi, rounds: 0, black: false, chroma: reference.chroma, chroma95: reference.chroma95 };
     this.s = s;
     commit(); // from here closeSession() frees it
     await this.cacheDistance();
@@ -916,7 +916,9 @@ export class Engine {
       pixels = new Uint8Array(sub.buffer);
     }
     const calib = wantCalib ? renderedQuantiles(new Uint8Array(data)) : undefined; // read before `data` is transferred
-    const oursChroma = wantCalib && s.calib?.black && !s.calib.color ? renderedChroma(new Uint8Array(data)) : undefined;
+    const calibHi = wantCalib ? renderedQuantiles(new Uint8Array(data), HI_QS) : undefined;
+    const oursC = wantCalib && s.calib?.black && !s.calib.color ? chromaStats(new Uint8Array(data)) : undefined;
+    const oursChroma = oursC?.mean;
     if (this.display) this.post({ type: "preview", width: src.width, height: src.height, space: "p3", final, ms: performance.now() - t0 });
     else this.post({ type: "preview", width: src.width, height: src.height, data, space: "p3", final, ms: performance.now() - t0 }, [data]);
     if (calib !== undefined && s.calib) {
@@ -945,7 +947,12 @@ export class Engine {
             // so nothing is pushed out of gamut); more colourful: less saturation.
             const sat0 = p.color.saturation, vib0 = p.color.vibrance;
             let sat = sat0, vib = vib0;
-            if (r > 1) vib = Math.round(Math.min(0.6, vib0 + (Math.pow(r, 0.8) - 1) * 1.8) * 100) / 100;
+            // Only as far as the strongest colours stay within the camera's own: an average
+            // pulled down by grey surfaces must not push the vivid ones out of gamut.
+            const room = oursC && s.calib.chroma95 ? s.calib.chroma95 / Math.max(oursC.p95, 1e-6) : r;
+            const rb = Math.min(r, Math.max(1, 1 + (room - 1) * 2));
+            // (Vibrance multiplies weak chroma by ≈ 1 + vibrance: the shortfall itself.)
+            if (r > 1) vib = Math.round(Math.min(0.6, vib0 + (rb - 1) * 0.9) * 100) / 100;
             else sat = Math.round(Math.max(-0.3, (1 + sat0) * Math.pow(r, 0.8) - 1) * 100) / 100;
             const note = `colour matched to the camera's rendering: mid-tone chroma ${oursChroma.toFixed(3)} vs ${ref.toFixed(3)} → ${r > 1 ? `vibrance ${vib > 0 ? "+" : ""}${Math.round(vib * 100)}` : `saturation ${Math.round(sat * 100)}`}`;
             this.log(note);
@@ -958,14 +965,14 @@ export class Engine {
         // Exposure settled: now the black point, on the same rendering.
         s.calib.rounds = 2;
         s.calib.black = true;
-        const points = shadowMatch(calib, s.calib.ref);
+        const points = shadowMatch(calib, s.calib.ref, calibHi, s.calib.refHi);
         if (points) {
-          const note = `black point matched to the camera's rendering: shadows ${calib.slice(0, MEDIAN).map((v) => Math.round(v * 255)).join("/")} → ${s.calib.ref.slice(0, MEDIAN).map((v) => Math.round(v * 255)).join("/")}`;
+          const note = `tones matched to the camera's rendering: shadows ${calib.slice(0, MEDIAN).map((v) => Math.round(v * 255)).join("/")} → ${s.calib.ref.slice(0, MEDIAN).map((v) => Math.round(v * 255)).join("/")}, highlights ${calibHi!.map((v) => Math.round(v * 255)).join("/")} → ${(s.calib.refHi ?? []).map((v) => Math.round(v * 255)).join("/")}`;
           this.log(note);
           this.post({ type: "blackPointMatched", points, note });
-        }
-        // (The colour step reads the next final preview: make sure there is one.)
-        this.requestRender(true);
+          // (The colour step reads the next final preview — with this curve, which the
+          // page adds and sends back: measured before it, the colour would be off.)
+        } else this.requestRender(true); // no curve: the colour step needs a preview of its own
       }
     }
     if (pixels) {
@@ -1482,7 +1489,8 @@ export class Engine {
     // the whole-photo figures. Our plain development of the RAW is far paler than what the
     // phone shows, and would make any edit look "twice as colourful".
     if (s.cameraRef === undefined) s.cameraRef = /\.dng$/i.test(s.name) ? (await embeddedPreviewPixels(s.file, 256, isMobile() ? 24 : Infinity)) ?? null : null;
-    const camera = s.cameraRef ?? undefined;
+    // A JPEG / HEIC is itself the camera's rendering (and "before" shows it unchanged).
+    const camera = s.cameraRef ?? (s.work.referred === "display" ? { rgba: before, w: t.w, h: t.h } : undefined);
     const items = checkPhoto({ final: { rgba: final, w: t.w, h: t.h }, before: { rgba: before, w: t.w, h: t.h }, camera, seg, scene: { ev: sceneEV(s.decoded.meta) } });
     // The fixes are worked out next, as their own job (solveCheckFixes): the findings show at once.
     this.lastCheck = { s, items: items.map((i) => ({ ...i, mask: undefined })), seg, scene: { ev: sceneEV(s.decoded.meta) }, camera };

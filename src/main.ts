@@ -6,6 +6,7 @@ import "./styles.css";
 import type { Capabilities, ExportFormat, FromWorker, StageProfile, Summary, ToWorker, UpscaleInfo, UpscaleMode } from "./engine/protocol.ts";
 import { createToneEqPanel } from "./ui/toneEqPanel.ts";
 import { createContrastEqPanel } from "./ui/contrastEqPanel.ts";
+import { clearFeedback, feedbackBlob, feedbackCount, recordEdit } from "./ui/autoFeedback.ts";
 import { DEPTH_BANDS, defaultParams, type Decision, type DepthBand, type Params } from "./decision/params.ts";
 import { createLookPanel } from "./ui/lookPanel.ts";
 import { createRegionsPanel } from "./ui/regionsPanel.ts";
@@ -354,6 +355,8 @@ function baseView(): { type: "view"; view: 0 | 1 | 2 | 6 | 9; region?: number } 
 /** A photo is being opened (its analysis has not arrived): late messages about the previous one are ignored. */
 let opening = false;
 function openFile(f: File, restore?: Params, upscaleOverride?: UpscaleMode) {
+  // What was changed after the automatic development of the photo being left (this device only).
+  if (!opening && params && autoParams) { recordEdit("leave", summary, autoParams, params); renderFeedback(); }
   opening = true;
   layersPanel.reset(); // nothing of the previous photo's editing state (tab, picking, a flare waiting) survives
   forgetPendingParams();
@@ -1447,7 +1450,15 @@ const stageToggles = el("div");
 const profTable = el("table", { class: "prof" });
 const logPre = el("pre", { class: "log" });
 const dlReport = el("button", { class: "btn small", text: t("dbg.download") });
-debugPane.append(el("div", { class: "group-title", text: t("dbg.stages") }), stageToggles, el("div", { class: "group-title", text: t("dbg.profile") }), profTable, el("div", { class: "group-title", text: t("dbg.log") }), logPre, el("div", { class: "actions" }, dlReport));
+// Auto feedback (src/ui/autoFeedback.ts): what was changed after the automatic development.
+const dlFeedback = el("button", { class: "btn small" });
+const clearFb = el("button", { class: "btn small ghost", text: t("fb.clear") });
+function renderFeedback() { dlFeedback.textContent = t("fb.download", { n: String(feedbackCount()) }); }
+dlFeedback.onclick = () => download(feedbackBlob(), `auto-feedback-${new Date().toISOString().slice(0, 10)}.json`);
+clearFb.onclick = () => { clearFeedback(); renderFeedback(); };
+renderFeedback();
+debugPane.append(el("div", { class: "group-title", text: t("dbg.stages") }), stageToggles, el("div", { class: "group-title", text: t("dbg.profile") }), profTable, el("div", { class: "group-title", text: t("dbg.log") }), logPre, el("div", { class: "actions" }, dlReport),
+  el("div", { class: "group-title", text: t("fb.title") }), el("p", { class: "muted", text: t("fb.tip") }), el("div", { class: "actions" }, dlFeedback, clearFb));
 const STAGES: Array<[keyof Params["enable"], string]> = [
   ["denoise", t("dbg.denoise")], ["wb", t("dbg.wb")], ["exposure", t("dbg.exposure")], ["localTone", t("dbg.localTone")],
   ["curves", t("dbg.curves")], ["lut", t("dbg.lut")], ["semantic", t("dbg.semantic")], ["dehaze", t("dbg.dehaze")], ["sharpen", t("dbg.sharpen")],
@@ -1816,6 +1827,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       setExportEnabled(true);
       setProgress(undefined);
       exportInfo.textContent = t("exp.done", { file: m.name, mb: (m.blob.size / 1e6).toFixed(1), s: (m.ms / 1000).toFixed(1) });
+      recordEdit("export", summary, autoParams, params); renderFeedback();
       void share(m.blob, m.name);
       break;
     case "looks":

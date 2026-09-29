@@ -35,3 +35,14 @@ test("black point from the camera: lifted shadows go deeper, crushed ones open, 
   }
   assert.equal(shadowMatch(v([20, 30, 40, 50, 80, 120]), v([21, 30, 41, 50, 81, 120])), undefined, "already matching");
 });
+
+test("tone match: highlights short of the camera's are lifted toward it, the median stays", async () => {
+  const { shadowMatch } = await import("../src/decode/preview.ts");
+  const v = (a: number[]) => a.map((x) => x / 255);
+  const pts = shadowMatch(v([10, 20, 30, 45, 80, 120]), v([10, 20, 30, 45, 80, 120]), v([150, 170, 185, 195]), v([165, 200, 235, 250]))!;
+  assert.ok(pts, "a curve");
+  const at = (x: number) => { for (let i = 1; i < pts.length; i++) if (x <= pts[i].x) { const a = pts[i - 1], b = pts[i]; return a.y + ((x - a.x) / (b.x - a.x)) * (b.y - a.y); } return 1; };
+  assert.ok(Math.abs(at(120 / 255) - 120 / 255) < 1e-3, "median unchanged");
+  assert.ok(at(185 / 255) > 185 / 255 + 10 / 255, `highlights lifted: ${Math.round(at(185 / 255) * 255)}`);
+  for (let i = 1; i < pts.length; i++) assert.ok(pts[i].y >= pts[i - 1].y, "monotone");
+});

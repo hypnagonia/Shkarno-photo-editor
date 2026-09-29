@@ -55,6 +55,8 @@ export function findPreview(head: Uint8Array): JpegInfo | null {
  */
 export const REF_QS = [0.005, 0.02, 0.05, 0.1, 0.25, 0.5];
 export const MEDIAN = REF_QS.length - 1;
+/** …and the highlights (the white point side). */
+export const HI_QS = [0.75, 0.9, 0.98, 0.995];
 
 /** Display-encoded luminance quantiles of rendered 8-bit P3 pixels (rgba), subsampled. */
 export function renderedQuantiles(px: Uint8Array, qs: number[] = REF_QS, stride = 7): number[] {
@@ -76,7 +78,7 @@ export function renderedQuantiles(px: Uint8Array, qs: number[] = REF_QS, stride 
  * rendering), each level at most 20/255; the result is monotone with a sane slope.
  * Undefined when the shadows already agree (within 3/255).
  */
-export function shadowMatch(ours: number[], ref: number[]): Array<{ x: number; y: number }> | undefined {
+export function shadowMatch(ours: number[], ref: number[], oursHi?: number[], refHi?: number[]): Array<{ x: number; y: number }> | undefined {
   const MAX = 20 / 255, SHARE = 0.7, DEEP = REF_QS.indexOf(0.1);
   const pts: Array<{ x: number; y: number }> = [{ x: 0, y: 0 }];
   let moved = 0;
@@ -91,35 +93,56 @@ export function shadowMatch(ours: number[], ref: number[]): Array<{ x: number; y
     moved = Math.max(moved, Math.abs(y - x));
     pts.push({ x, y });
   }
-  if (moved < 3 / 255) return undefined;
   const m = ours[MEDIAN];
   if (m > pts[pts.length - 1].x + 0.02) pts.push({ x: m, y: m });
+  // The highlights the same way (above the median, which stays): brighter whites where
+  // ours stop short of the camera's (no real white), softer where ours are harder.
+  if (oursHi && refHi) {
+    for (let i = 0; i < oursHi.length; i++) {
+      const x = oursHi[i], prev = pts[pts.length - 1];
+      if (x <= prev.x + 0.02 || x >= 0.985) continue;
+      let y = x + Math.max(-MAX, Math.min(MAX, SHARE * (refHi[i] - x)));
+      y = Math.max(y, prev.y + (x - prev.x) * 0.35);
+      y = Math.min(y, prev.y + (x - prev.x) * 2.5, 0.995);
+      moved = Math.max(moved, Math.abs(y - x));
+      pts.push({ x, y });
+    }
+  }
+  if (moved < 3 / 255) return undefined;
   pts.push({ x: 1, y: 1 });
   return pts.map((p) => ({ x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 }));
 }
 
 export interface PreviewStats {
   width: number; height: number;
-  /** Display-encoded luminance at the requested quantiles. */
+  /** Display-encoded luminance at the requested quantiles, and at HI_QS. */
   q: number[];
-  /** How colourful it is: mean OkLab chroma of its mid-tones (renderedChroma). */
+  qHi: number[];
+  /** How colourful it is: mean OkLab chroma of its mid-tones, and its 95th percentile (renderedChroma). */
   chroma: number;
+  chroma95: number;
 }
 
 /**
  * Mean OkLab chroma of display-encoded P3 pixels (RGBA) in the mid-tones (OkLab L
  * 0.25 … 0.92: deep shadows and near-white say little about colourfulness).
  */
-export function renderedChroma(px: Uint8Array, stride = 7): number {
+export function renderedChroma(px: Uint8Array, stride = 7): number { return chromaStats(px, stride).mean; }
+
+/** Mean and 95th percentile of the mid-tones' OkLab chroma (see renderedChroma). */
+export function chromaStats(px: Uint8Array, stride = 7): { mean: number; p95: number } {
+  const cs: number[] = [];
   let sum = 0, n = 0;
   for (let k = 0; k < px.length; k += 4 * stride) {
     const r = eotf(px[k] / 255), g = eotf(px[k + 1] / 255), b = eotf(px[k + 2] / 255);
     // Linear P3 → linear sRGB primaries (OkLab's input), then OkLab.
     const lab = linSrgbToOklab([1.2249401 * r - 0.2249404 * g, -0.0420569 * r + 1.0420571 * g, -0.0196376 * r - 0.0786361 * g + 1.0982735 * b]);
     if (lab[0] < 0.25 || lab[0] > 0.92) continue;
-    sum += Math.hypot(lab[1], lab[2]); n++;
+    const c = Math.hypot(lab[1], lab[2]);
+    sum += c; n++; cs.push(c);
   }
-  return n ? sum / n : 0;
+  cs.sort((a, b) => a - b);
+  return { mean: n ? sum / n : 0, p95: cs.length ? cs[Math.floor(cs.length * 0.95)] : 0 };
 }
 
 /**
@@ -189,5 +212,5 @@ export async function embeddedPreviewStats(file: Blob, qs: number[], maxMP = Inf
     ys.push(oetf(Y));
   }
   ys.sort((a, b) => a - b);
-  return { width: img.w, height: img.h, q: qs.map((q) => ys[Math.min(ys.length - 1, Math.floor(q * ys.length))]), chroma: renderedChroma(px, 1) };
+  return { width: img.w, height: img.h, q: qs.map((q) => ys[Math.min(ys.length - 1, Math.floor(q * ys.length))]), qHi: HI_QS.map((q) => ys[Math.min(ys.length - 1, Math.floor(q * ys.length))]), ...(() => { const c = chromaStats(px, 1); return { chroma: c.mean, chroma95: c.p95 }; })() };
 }
