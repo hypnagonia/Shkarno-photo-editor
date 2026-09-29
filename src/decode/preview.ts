@@ -1,3 +1,4 @@
+import { linSrgbToOklab } from "../color/oklab.ts";
 import { srgbEotf as eotf, srgbOetf as oetf } from "../color/transfer.ts";
 import { jpegDC } from "./jpegDC.ts";
 /**
@@ -101,6 +102,24 @@ export interface PreviewStats {
   width: number; height: number;
   /** Display-encoded luminance at the requested quantiles. */
   q: number[];
+  /** How colourful it is: mean OkLab chroma of its mid-tones (renderedChroma). */
+  chroma: number;
+}
+
+/**
+ * Mean OkLab chroma of display-encoded P3 pixels (RGBA) in the mid-tones (OkLab L
+ * 0.25 … 0.92: deep shadows and near-white say little about colourfulness).
+ */
+export function renderedChroma(px: Uint8Array, stride = 7): number {
+  let sum = 0, n = 0;
+  for (let k = 0; k < px.length; k += 4 * stride) {
+    const r = eotf(px[k] / 255), g = eotf(px[k + 1] / 255), b = eotf(px[k + 2] / 255);
+    // Linear P3 → linear sRGB primaries (OkLab's input), then OkLab.
+    const lab = linSrgbToOklab([1.2249401 * r - 0.2249404 * g, -0.0420569 * r + 1.0420571 * g, -0.0196376 * r - 0.0786361 * g + 1.0982735 * b]);
+    if (lab[0] < 0.25 || lab[0] > 0.92) continue;
+    sum += Math.hypot(lab[1], lab[2]); n++;
+  }
+  return n ? sum / n : 0;
 }
 
 /**
@@ -157,33 +176,18 @@ function boxDown(img: { rgba: Uint8Array; w: number; h: number }, long: number):
 }
 
 export async function embeddedPreviewStats(file: Blob, qs: number[], maxMP = Infinity): Promise<PreviewStats | undefined> {
-  if (typeof createImageBitmap !== "function" || typeof OffscreenCanvas === "undefined") return undefined;
-  // Previews sit in the first part of the file (before the raw data in Apple's layout,
-  // but not always): read up to 48 MB, which also covers most cameras' layouts.
-  let head: Uint8Array;
-  try { head = new Uint8Array(await file.slice(0, Math.min(file.size, (maxMP < Infinity ? 24 : 48) << 20)).arrayBuffer()); }
-  catch { return undefined; } // no memory for it: the photo opens without the reference
-  const best = findPreview(head);
-  // A phone's browser may decode the whole picture before shrinking it (48 MP ≈ 200 MB).
-  if (!best || (best.width * best.height) / 1e6 > maxMP) return undefined;
-  try {
-    const w = 256, h = Math.max(1, Math.round((w * best.height) / best.width));
-    // The JPEG only (not the raw data after it): ≈ 2 bytes per pixel is a generous bound.
-    const bmp = await createImageBitmap(file.slice(best.offset, best.offset + Math.max(4 << 20, best.width * best.height * 2)), { resizeWidth: w, resizeHeight: h, resizeQuality: "medium" });
-    const c = new OffscreenCanvas(bmp.width, bmp.height);
-    const g = c.getContext("2d", { willReadFrequently: true })!;
-    g.drawImage(bmp, 0, 0);
-    bmp.close();
-    const px = g.getImageData(0, 0, c.width, c.height).data;
-    const ys: number[] = [];
-    for (let k = 0; k < px.length; k += 4) {
-      // Display P3 luminance (Apple's previews are P3); encoded like our own display levels.
-      const Y = 0.229 * eotf(px[k] / 255) + 0.6917 * eotf(px[k + 1] / 255) + 0.0793 * eotf(px[k + 2] / 255);
-      ys.push(oetf(Y));
-    }
-    ys.sort((a, b) => a - b);
-    return { width: best.width, height: best.height, q: qs.map((q) => ys[Math.min(ys.length - 1, Math.floor(q * ys.length))]) };
-  } catch {
-    return undefined;
+  // The pixels as the Check reads them: a 48 MP preview (every 48 MP ProRAW's) by its DC
+  // coefficients, ≈ 1 MB. (Refusing previews over `maxMP` on phones left every such
+  // photo without the camera reference there: no exposure calibration at all.)
+  const img = await embeddedPreviewPixels(file, 256, maxMP);
+  if (!img) return undefined;
+  const px = img.rgba;
+  const ys: number[] = [];
+  for (let k = 0; k < px.length; k += 4) {
+    // Display P3 luminance (Apple's previews are P3); encoded like our own display levels.
+    const Y = 0.229 * eotf(px[k] / 255) + 0.6917 * eotf(px[k + 1] / 255) + 0.0793 * eotf(px[k + 2] / 255);
+    ys.push(oetf(Y));
   }
+  ys.sort((a, b) => a - b);
+  return { width: img.w, height: img.h, q: qs.map((q) => ys[Math.min(ys.length - 1, Math.floor(q * ys.length))]), chroma: renderedChroma(px, 1) };
 }

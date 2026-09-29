@@ -1762,6 +1762,20 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       syncControls();
       break;
     }
+    case "colorCalibrated": {
+      // Part of opening the photo, like the exposure calibration.
+      if (opening) break;
+      markCheckStale();
+      if (autoParams) { autoParams.color.saturation = m.saturation; autoParams.color.vibrance = m.vibrance; }
+      if (params && params.color.saturation === m.from[0] && params.color.vibrance === m.from[1]) {
+        params.color.saturation = m.saturation; params.color.vibrance = m.vibrance;
+        if (!history.canUndo) history.reset(params, t("hist.open"));
+        rememberParams(params);
+        syncControls();
+      }
+      logLines.push(m.note);
+      break;
+    }
     case "exposureCalibrated": {
       // Part of opening the photo, not an edit: the history's first step takes it too.
       if (opening) break; // the previous photo's, arriving after another was opened

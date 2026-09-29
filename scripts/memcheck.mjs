@@ -89,7 +89,7 @@ for (const photo of photos) {
   if (!existsSync(`.samples/${photo}`)) { console.log(`skip ${photo}: not in .samples`); continue; }
   rmSync(REPORT, { force: true });
   const what = `photo=${encodeURIComponent(photo)}`;
-  const b = launch(`http://localhost:${port}/?autotest&phone&close&${what}&steps=${stepsFor(photo)}${flag("save") ? "&save" : ""}${opt("teq") ? `&teq=${opt("teq")}` : ""}${opt("ceq") ? `&ceq=${opt("ceq")}` : ""}&run=${Date.now()}`);
+  const b = launch(`http://localhost:${port}/?autotest&phone&close&${what}&steps=${stepsFor(photo)}${flag("save") ? "&save" : ""}${opt("teq") ? `&teq=${opt("teq")}` : ""}${opt("ceq") ? `&ceq=${opt("ceq")}` : ""}${flag("logs") ? "&logs" : ""}&run=${Date.now()}`);
   console.log(`\n${photo} (${browser}): ${stepsFor(photo)}`);
   const peaks = new Map(); // step → { page, gpu, tracked }
   let stage = "load", sub = "", done = "", message = "", gpuBase = -1, seen = 0;

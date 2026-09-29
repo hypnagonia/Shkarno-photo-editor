@@ -13,7 +13,8 @@
     "predev": "node scripts/copy-ort.mjs",
     "prebuild": "node scripts/copy-ort.mjs",
     "memcheck": "node scripts/memcheck.mjs",
-    "deploy": "npm run build && node scripts/memcheck.mjs --no-build && npx vercel deploy --prod --yes"
+    "deploy": "npm run build && node scripts/memcheck.mjs --no-build && npx vercel deploy --prod --yes",
+    "bench": "node scripts/bench.mjs"
   },
   "dependencies": {
     "libheif-js": "^1.19.8",

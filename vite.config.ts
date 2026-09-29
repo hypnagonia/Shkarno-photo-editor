@@ -24,7 +24,8 @@ const localTesting: Array<[string, Mw]> = [
   }],
   ["/__samples", (req, res, next) => {
     const name = decodeURIComponent((req.url ?? "").split("?")[0].replace(/^\//, ""));
-    if (!/^[\w.\-]+$/.test(name)) return next();
+    // A file in .samples, or in one folder of it (bench/…).
+    if (!/^([\w.\-]+\/)?[\w.\- ]+$/.test(name) || name.includes("..")) return next();
     try {
       const data = readFileSync(join(".samples", name));
       res.setHeader("Content-Type", "application/octet-stream");

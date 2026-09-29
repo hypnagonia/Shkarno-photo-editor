@@ -40,7 +40,7 @@ export async function runAutotest(app: AutotestApp) {
     if (m.type === "error") void report("error", { message: m.message });
     // A GPU validation error drops that dispatch silently (the result is just wrong): fail the run.
     if (m.type === "log" && /^GPU error/.test(m.text)) void report("gpuerror", { message: m.text });
-    if (m.type === "log" && /^(Apple mattes|auto focus)/.test(m.text)) void report("log", { text: m.text });
+    if (m.type === "log" && (q.has("logs") || /^(Apple mattes|auto focus)/.test(m.text))) void report("log", { text: m.text });
   });
   const waitFor = (pred: (m: FromWorker) => boolean, what: string, ms = 240_000) => new Promise<FromWorker>((resolve, reject) => {
     const timer = setTimeout(() => { off(); reject(new Error(`timeout waiting for ${what}`)); }, ms);
@@ -73,7 +73,7 @@ export async function runAutotest(app: AutotestApp) {
     await report(`${label}:start`);
     const res = await fetch(`/__samples/${encodeURIComponent(photo)}`);
     if (!res.ok) throw new Error(`sample ${photo}: ${res.status}`);
-    const f = new File([await res.blob()], photo);
+    const f = new File([await res.blob()], photo.split("/").pop()!);
     const done = finalPreview(label);
     app.openFile(f);
     await done;
@@ -104,7 +104,14 @@ export async function runAutotest(app: AutotestApp) {
     await report("start", { ua: navigator.userAgent, gpu: "gpu" in navigator, isolated: crossOriginIsolated });
     for (const s of steps) {
       if (s === "open") await open("open");
-      else if (s === "snap") await saveExport("snap");
+      else if (s === "snap") await saveExport(q.get("tag") ?? "snap");
+      else if (s === "check") {
+        // The Check tab's findings on the automatic result (the quality benchmark reads them).
+        const r = waitFor((m) => m.type === "check", "check", 120_000);
+        app.send({ type: "check" });
+        const m = await r;
+        if (m.type === "check") await report("check", { items: m.items.map((i) => ({ id: i.id, level: i.level, err: i.err, v: i.v })) });
+      }
       else if (s === "dof") {
         // Depth of field on (automatic focus and strength, or 0.6 when auto found none).
         const p = app.params(); if (!p) throw new Error("no photo");

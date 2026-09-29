@@ -31,7 +31,7 @@ import type { AnalysisReport } from "../analysis/types.ts";
 import { decide, type DecisionResult } from "../decision/engine.ts";
 import { autoFocus, objectDepthRange } from "../decision/focus.ts";
 import { buildAutoLayers } from "../layers/auto.ts";
-import { embeddedPreviewPixels, embeddedPreviewStats, MEDIAN, REF_QS, renderedQuantiles, shadowMatch } from "../decode/preview.ts";
+import { embeddedPreviewPixels, embeddedPreviewStats, MEDIAN, REF_QS, renderedChroma, renderedQuantiles, shadowMatch } from "../decode/preview.ts";
 import { displayQuantiles } from "../decision/autoCurves.ts";
 import { allMask, makeLayer } from "../layers/model.ts";
 import { depthZones } from "../decision/zones.ts";
@@ -99,7 +99,7 @@ interface Session {
    * final previews are measured and the automatic exposure corrected (≤ 2 rounds),
    * unless the exposure was changed by then.
    */
-  calib?: { ref: number[]; rounds: number; black: boolean };
+  calib?: { ref: number[]; rounds: number; black: boolean; chroma?: number; color?: boolean };
   /** Preview proxy. `owned` is false when it aliases the working textures (image ≤ preview size). */
   proxy?: { base: GPUTexture; denoised: GPUTexture; w: number; h: number; owned: boolean };
   /** Quarter-pixel proxy used while a slider is being dragged. */
@@ -511,7 +511,7 @@ export class Engine {
     const A = decision.params.dehaze.light.map((v) => srgbEotf(v) / gain) as [number, number, number];
 
     const s: Session = { name: file.name, file, decoded, work, denoised: work.tex, gain, scene, maps, report, decision, params, lightLinear: A, scale: 1, skin: skinTex };
-    if (reference && autoExposure) s.calib = { ref: reference.q, rounds: 0, black: false };
+    if (reference && autoExposure) s.calib = { ref: reference.q, rounds: 0, black: false, chroma: reference.chroma };
     this.s = s;
     commit(); // from here closeSession() frees it
     await this.cacheDistance();
@@ -891,7 +891,7 @@ export class Engine {
     // Histograms for the curve boxes (the edit as rendered; not for "before" or debug views),
     // computed after the preview is on its way so they never delay it.
     const wantHist = final && !draft && !this.before && this.view === 0;
-    const wantCalib = final && !draft && !this.before && this.view === 0 && !!s.calib && (s.calib.rounds < 2 || !s.calib.black) && Math.abs(p.exposure - s.decision.params.exposure) < 1e-6;
+    const wantCalib = final && !draft && !this.before && this.view === 0 && !!s.calib && (s.calib.rounds < 2 || !s.calib.black || !s.calib.color) && Math.abs(p.exposure - s.decision.params.exposure) < 1e-6;
     if (this.display) {
       // Straight onto the page's canvas: no readback, transfer or drawing on the page.
       const { canvas, ctx } = this.display;
@@ -916,6 +916,7 @@ export class Engine {
       pixels = new Uint8Array(sub.buffer);
     }
     const calib = wantCalib ? renderedQuantiles(new Uint8Array(data)) : undefined; // read before `data` is transferred
+    const oursChroma = wantCalib && s.calib?.black && !s.calib.color ? renderedChroma(new Uint8Array(data)) : undefined;
     if (this.display) this.post({ type: "preview", width: src.width, height: src.height, space: "p3", final, ms: performance.now() - t0 });
     else this.post({ type: "preview", width: src.width, height: src.height, data, space: "p3", final, ms: performance.now() - t0 }, [data]);
     if (calib !== undefined && s.calib) {
@@ -932,6 +933,27 @@ export class Engine {
         if (s.params.exposure === p.exposure) s.params = { ...s.params, exposure: ev };
         this.post({ type: "exposureCalibrated", exposure: ev, note });
         this.requestRender(true);
+      } else if (s.calib.black && !s.calib.color) {
+        // Exposure and black point settled: colourfulness, to the camera's (the automatic
+        // saturation, never beyond ±0.35; not over a saturation set by hand meanwhile).
+        s.calib.color = true;
+        const ref = s.calib.chroma ?? 0;
+        if (oursChroma !== undefined && oursChroma > 0.01 && ref > 0.01) {
+          const r = ref / oursChroma;
+          if (Math.abs(Math.log(r)) > 0.08) {
+            // Paler than the camera: more vibrance (it lifts weak colour and spares strong,
+            // so nothing is pushed out of gamut); more colourful: less saturation.
+            const sat0 = p.color.saturation, vib0 = p.color.vibrance;
+            let sat = sat0, vib = vib0;
+            if (r > 1) vib = Math.round(Math.min(0.6, vib0 + (Math.pow(r, 0.8) - 1) * 1.8) * 100) / 100;
+            else sat = Math.round(Math.max(-0.3, (1 + sat0) * Math.pow(r, 0.8) - 1) * 100) / 100;
+            const note = `colour matched to the camera's rendering: mid-tone chroma ${oursChroma.toFixed(3)} vs ${ref.toFixed(3)} → ${r > 1 ? `vibrance ${vib > 0 ? "+" : ""}${Math.round(vib * 100)}` : `saturation ${Math.round(sat * 100)}`}`;
+            this.log(note);
+            s.decision.params.color = { ...s.decision.params.color, saturation: sat, vibrance: vib };
+            if (s.params.color.saturation === sat0 && s.params.color.vibrance === vib0) { s.params = { ...s.params, color: { ...s.params.color, saturation: sat, vibrance: vib } }; this.requestRender(true); }
+            this.post({ type: "colorCalibrated", saturation: sat, vibrance: vib, from: [sat0, vib0], note });
+          }
+        }
       } else {
         // Exposure settled: now the black point, on the same rendering.
         s.calib.rounds = 2;
@@ -942,6 +964,8 @@ export class Engine {
           this.log(note);
           this.post({ type: "blackPointMatched", points, note });
         }
+        // (The colour step reads the next final preview: make sure there is one.)
+        this.requestRender(true);
       }
     }
     if (pixels) {
