@@ -11,6 +11,7 @@
     "open",
     "select",
     "blur",
+    "toneeq",
     "export",
     "reopen"
   ],

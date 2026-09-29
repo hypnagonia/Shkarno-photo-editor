@@ -1,3 +1,4 @@
+import type { MaskHist, ToneEqDetail } from "../tone/toneEq.ts";
 import type { FixChange } from "../analysis/checkFix.ts";
 import type { CheckItem } from "../analysis/check.ts";
 import type { Region } from "../decision/params.ts";
@@ -60,9 +61,13 @@ export type ToWorker =
   | { type: "init"; base: string; forceCpu?: boolean; /** Behave as on a phone (local autotest only). */ phone?: boolean }
   | { type: "open"; file: File; resolution: "auto" | "full" | "half"; autoExposure: boolean; autoDof: boolean; upscale: UpscaleMode; /** Scene analysis on the CPU (it crashed this device's GPU before). */ safeAnalysis?: boolean; /** Less scene analysis: the tab died during it on this device before. */ analysis?: AnalysisLevel; /** Several shots of one scene, merged (src/burst); `file` is the first. */ series?: { files: File[]; ref?: number } }
   | { type: "seriesView"; single: boolean }
+  /** Which tone-equalizer zone (0 = −8 EV … 8 = 0 EV) the photo is in at x, y (0…1). */
+  | { type: "toneEqZone"; x: number; y: number }
+  /** The tone equalizer's mask histograms as the photo renders now. */
+  | { type: "toneEqHist" }
   | { type: "upscale-now" }
   | { type: "params"; params: Params; draft?: boolean }
-  | { type: "view"; view: 0 | 1 | 2 | 4 | 5 | 6; before?: boolean; region?: number; range?: [number, number] }
+  | { type: "view"; view: 0 | 1 | 2 | 4 | 5 | 6 | 9; before?: boolean; region?: number; range?: [number, number] }
   | { type: "focus"; action: "toggle"; x: number; y: number }
   | { type: "focus"; action: "move"; index: number; x: number; y: number }
   | { type: "focus"; action: "clear" }
@@ -116,6 +121,8 @@ export type FromWorker =
   | { type: "upscale"; info: UpscaleInfo }
   /** The open photo is a merged series (undefined: a single photo). */
   | { type: "series"; info?: SeriesInfo }
+  | { type: "toneEqZone"; zone?: number }
+  | { type: "toneEqHist"; hist?: Record<ToneEqDetail, MaskHist> }
   | { type: "error"; message: string; stage?: string };
 
 /** What the photo is at a tapped point: the ingredients of "this object / this colour / this far". */

@@ -46,6 +46,8 @@ struct U {
   hdr: vec4<f32>,           // x: write the HDR gain (1) or not (0)
   dsem: array<vec4<f32>, 9>,  // by distance (near, middle, far), relative to the region: 3 vec4 each, laid out like sem
   lay: vec4<u32>,           // adjustment layers (layers.wgsl): count, atlas rows; z: distance bands with detail settings (bits 0–2)
+  teq: vec4<f32>,           // tone equalizer (src/tone/toneEq.ts): detail (0 none … 3 smooth, −1 off), mask exposure, mask contrast
+  teq_lut: array<vec4<f32>, 16>, // its curve: 64 gains (EV) over mask −10 … +2 EV
 }
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -529,6 +531,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   var ev = 0.0;
   if ((flags & EN_EXPOSURE) != 0u) { ev = u.a.x + sem.exp; }
   c = c * exp2(ev);
+
   // View 3: scene-linear working RGB after denoise/WB/dehaze/exposure (linear DNG export).
   if (u.flags.w == 3u) {
     textureStore(dst, tp, vec4<f32>(max(c, vec3<f32>(0.0)), 1.0));
@@ -542,6 +545,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let delta = (log2(Y) - log2(Y0)); // what WB/dehaze/exposure changed, in EV
   let depthMul = mix(u.tone.z, u.tone.w, smoothstep(0.15, 0.95, dist));
   var Lp = L;
+  // The smoothed base after local tone mapping (coarse, medium): the tone equalizer's mask.
+  var mapC = L; var mapM = L; var mapped = false;
   if ((flags & EN_LOCAL) != 0u) {
     let cc = bil(tc, gp);
     let mm = bil(tm, gp);
@@ -558,8 +563,37 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let gm = 1.0 + u.local.y * sem.clarity * depthMul;
     let gf = 1.0 + u.local.z * sem.texture * depthMul;
     Lp = b2 + soft_detail(dMed, gm, 0.8) + soft_detail(dFine, gf, 1.5);
+    mapC = b2; mapM = b2 + soft_detail(dMed, gm, 0.8); mapped = true;
   }
   c = c * exp2(Lp - L);
+
+  // --- tone equalizer: exposure by the zone of a smoothed luminance mask --------------
+  // The mask is the guided-filter base (edges kept: no halos, texture untouched) as
+  // local tone mapping left it — the brightness the photo is shown at — so its zones are
+  // where the viewer sees them (0 EV ≈ white).
+  if (u.teq.x >= 0.0) {
+    var mev = Lp;
+    let det = u32(u.teq.x);
+    if (det > 0u) {
+      if (!mapped) {
+        let le = log_enc(Y0);
+        let cc = bil(tc, gp);
+        let mm = bil(tm, gp);
+        mapC = (cc.x * le + cc.y) * LOG_RANGE + LOG_MIN + delta;
+        mapM = (mm.z * le + mm.w) * LOG_RANGE + LOG_MIN + delta;
+      }
+      mev = select(select(0.5 * (mapM + mapC), mapC, det == 3u), mapM, det == 1u);
+    }
+    // View 10: the raw mask (before compensation), −16 … +4 EV as 0 … 1 (read back for the panel's histogram).
+    if (u.flags.w == 10u) { textureStore(dst, tp, vec4<f32>(vec3<f32>(clamp((mev + 16.0) / 20.0, 0.0, 1.0)), 0.0)); return; }
+    let cm = (mev + u.teq.y + 4.0) * u.teq.z - 4.0;
+    // View 9: the mask as the nine zones, grey steps (black = −8 EV and below, white = 0 and above).
+    if (u.flags.w == 9u) { textureStore(dst, tp, vec4<f32>(vec3<f32>(clamp(round(cm) + 8.0, 0.0, 8.0) / 8.0), 0.0)); return; }
+    let x = clamp((cm + 10.0) / 12.0, 0.0, 1.0) * 63.0;
+    let i0 = u32(floor(x)); let i1 = min(i0 + 1u, 63u);
+    let g0 = u.teq_lut[i0 / 4u][i0 % 4u]; let g1 = u.teq_lut[i1 / 4u][i1 % 4u];
+    c = c * exp2(mix(g0, g1, x - f32(i0)));
+  }
 
   // --- vignette (linear light: an exposure falloff, like a lens) --------------------
   // Multiplying scene-linear RGB keeps hue and saturation, and the tone curve that

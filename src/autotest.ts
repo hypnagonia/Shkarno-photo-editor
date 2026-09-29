@@ -132,6 +132,32 @@ export async function runAutotest(app: AutotestApp) {
     for (const s of steps) {
       if (s === "open") await open("open");
       else if (s === "burst") await burst();
+      else if (s === "snap") await saveExport("snap"); // (the photo as it is now, for comparisons)
+      else if (s === "toneeq") {
+        // Tone equalizer: the "compress" preset on a fitted mask, then its mask view (a read-back of zones).
+        const p = app.params();
+        if (!p) throw new Error("no photo");
+        const { autoFitMask, histQuantile, neutralToneEq, TONE_EQ_PRESETS } = await import("./tone/toneEq.ts");
+        await mem();
+        await report("toneeq:start");
+        const hr = waitFor((m) => m.type === "toneEqHist", "toneEqHist");
+        app.send({ type: "toneEqHist" });
+        const hm = await hr;
+        const h = hm.type === "toneEqHist" ? hm.hist?.balanced : undefined;
+        if (!h) throw new Error("no tone EQ histogram");
+        const fit = autoFitMask(h);
+        await report("toneeq:mask", { p5: histQuantile(h, 0.05), p50: histQuantile(h, 0.5), p95: histQuantile(h, 0.95), ...fit });
+        const done = finalPreview("toneeq");
+        p.toneEq = { ...neutralToneEq(), gains: [...TONE_EQ_PRESETS[q.get("teq") === "strong" ? 2 : 1].gains], ...fit };
+        app.pushParams();
+        await done;
+        await settle();
+        const z = waitFor((m) => m.type === "toneEqZone", "toneEqZone");
+        app.send({ type: "toneEqZone", x: 0.5, y: 0.2 });
+        const zr = await z;
+        if (q.has("save")) await saveExport("toneeq");
+        await report("toneeq:done", { zone: zr.type === "toneEqZone" ? zr.zone : undefined, ...(await mem()), js: await jsMem() });
+      }
       else if (s === "ab") await ab();
       else if (s === "reopen") await open("reopen");
       else if (s === "select") await addLayer("select", makeLayer("basic", "Autotest select", { mask: center, params: { exposure: 0.4, temp: 0, tint: 0, saturation: 0, vibrance: 0, hue: 0 } }));

@@ -4,6 +4,7 @@
  * them). Everything here is plain data so that it can be logged, diffed,
  * edited in the UI and serialised with an export.
  */
+import type { ToneEq } from "../tone/toneEq.ts";
 import { GROUPS, type Group } from "../neural/scene.ts";
 import type { LookProfile } from "../looks/profile.ts";
 import type { Layer } from "../layers/model.ts";
@@ -161,6 +162,8 @@ export interface Params {
    * (0 = monochrome grain, 1 = dye-cloud colour grain).
    */
   grain: { amount: number; size: number; roughness: number; color: number };
+  /** Tone equalizer (src/tone/toneEq.ts): exposure by brightness zone of a smoothed mask. Absent = off. */
+  toneEq?: ToneEq;
   /**
    * Depth of field. With no `points`, `focus` (automatic) is the single focal
    * distance. With points, a pixel stays sharp if it is near the distance of

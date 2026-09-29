@@ -5,6 +5,7 @@
 import "./styles.css";
 import type { Capabilities, ExportFormat, FromWorker, SeriesInfo, StageProfile, Summary, ToWorker, UpscaleInfo, UpscaleMode } from "./engine/protocol.ts";
 import { openSeriesSheet } from "./ui/seriesSheet.ts";
+import { createToneEqPanel } from "./ui/toneEqPanel.ts";
 import { DEPTH_BANDS, defaultParams, type Decision, type DepthBand, type Params } from "./decision/params.ts";
 import { createLookPanel } from "./ui/lookPanel.ts";
 import { createRegionsPanel } from "./ui/regionsPanel.ts";
@@ -164,6 +165,11 @@ let dofInfo: { justified: boolean; focus: number; strength: number; reason: stri
 let focusMode = false;
 /** Taps on the photo pick what a layer's mask selects (the layer's Mask tab turns this on). */
 let maskPicking = false;
+/** The tone equalizer is open: a tap on the photo finds its zone. */
+let toneEqPicking = false;
+/** Its mask (zones) shown on the photo (view 9). */
+let toneEqMask = false;
+let toneEqHist: Extract<FromWorker, { type: "toneEqHist" }>["hist"];
 /**
  * A tap that edits a mask. One at a time: taps while one is being worked out (the
  * first selection on a photo takes seconds on a phone), and a second tap of a quick
@@ -357,7 +363,8 @@ let pendingRestore: Params | undefined;
 /** The selected layer's mask shown on the photo (its index among the live layers), if any. */
 let maskIndex: number | undefined;
 /** What the photo shows when nothing temporary is on: the mask view, or the chosen view. */
-function baseView(): { type: "view"; view: 0 | 1 | 2 | 6; region?: number } {
+function baseView(): { type: "view"; view: 0 | 1 | 2 | 6 | 9; region?: number } {
+  if (toneEqMask) return { type: "view", view: 9 };
   return maskIndex !== undefined ? { type: "view", view: 6, region: maskIndex } : { type: "view", view: currentView };
 }
 /** A photo is being opened (its analysis has not arrived): late messages about the previous one are ignored. */
@@ -620,7 +627,7 @@ stage.addEventListener("pointerdown", (e) => {
   }
   if (pointers.size > 2) return;
   press = { x0: e.clientX, y0: e.clientY, px0: panX, py0: panY, moved: false };
-  if (maskPicking) {
+  if (maskPicking || toneEqPicking) {
     // A pick happens on release (a pan or a pinch picks nothing).
     const r = imageRect();
     const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
@@ -720,6 +727,7 @@ function pointerEnd(e: PointerEvent) {
   if (!p || p.moved || e.type === "pointercancel") return;
   if (p.tap) {
     if (maskPicking) maskTap(p.tap.x, p.tap.y, e.clientX, e.clientY);
+    else if (toneEqPicking) void askEngine({ type: "toneEqZone", x: p.tap.x, y: p.tap.y }, (m) => (m.type === "toneEqZone" ? m.zone ?? -1 : undefined), -1).then((z) => { if (z >= 0) toneEqPanel.selectZone(z); });
     else send({ type: "focus", action: "toggle", x: p.tap.x, y: p.tap.y });
     return;
   }
@@ -1019,6 +1027,17 @@ const llmPanel = createLlmPanel(llmPane, {
   canvas,
 });
 
+// Tone equalizer (src/ui/toneEqPanel.ts): a card of its own in the dock.
+const toneEqPanel = createToneEqPanel({
+  params: () => params,
+  changed: (label) => { nextLabel = label; lookPanel.invalidate(); pushParams(); },
+  hist: () => toneEqHist,
+  // The mask as the photo renders now (it follows exposure and local tone): asked when the panel opens.
+  refreshHist: () => { void askEngine({ type: "toneEqHist" }, (m) => (m.type === "toneEqHist" ? { h: m.hist } : undefined), { h: toneEqHist }).then((r) => { toneEqHist = r.h; toneEqPanel.redraw(); }); },
+  showMask: (on) => { if (toneEqMask === on) return; toneEqMask = on; send(baseView()); },
+  pickMode: (on) => { toneEqPicking = on && !!params; },
+});
+
 // Regions: per-segment controls (src/ui/regionsPanel.ts)
 const layersPanel = createLayersPanel(dockEl, propsEl, {
   params: () => params,
@@ -1031,6 +1050,7 @@ const layersPanel = createLayersPanel(dockEl, propsEl, {
   showMask: (i) => { maskIndex = i; send(baseView()); },
   develop: developEl,
   blur: blurEl,
+  toneEq: toneEqPanel,
   photoColors: () => askEngine({ type: "palette" }, (m) => (m.type === "palette" ? m.stats.palette.map((w) => w.hex) : undefined), [] as string[]),
   notice: (text) => { badge.textContent = text; badge.classList.add("on"); },
   brightest: () => askEngine({ type: "brightest" }, (m) => (m.type === "brightest" ? { x: m.x, y: m.y } : undefined), { x: 0.3, y: 0.2 }),
@@ -1639,7 +1659,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       noteAnalysisStage();
       opening = false;
       restored = false;
-      summary = m.summary; decisions = m.decisions; autoParams = m.auto; params = m.params; dofInfo = m.dof; cameraWB = m.cameraWB;
+      summary = m.summary; decisions = m.decisions; autoParams = m.auto; params = m.params; dofInfo = m.dof; cameraWB = m.cameraWB; toneEqHist = undefined;
       autoCurveBands = m.autoCurves;
       exportTop.disabled = busy;
       cellCov = m.cellCoverage;

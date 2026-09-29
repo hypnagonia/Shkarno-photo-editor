@@ -12,6 +12,7 @@
 import { Gpu, Uniforms } from "../gpu/gpu.ts";
 import toneWgsl from "../gpu/shaders/render_tone.wgsl?raw";
 import layersWgsl from "../gpu/shaders/layers.wgsl?raw";
+import { TONE_EQ_DETAIL, toneEqActive, toneEqLut } from "../tone/toneEq.ts";
 import { ATLAS_W, hasBlurLayers, packLayers, RECORD } from "../layers/gpu.ts";
 import type { MaskShape } from "../layers/model.ts";
 import detailWgsl from "../gpu/shaders/render_detail.wgsl?raw";
@@ -43,7 +44,7 @@ export interface RenderOptions {
   gain: number; // analysis/guide encoding gain k
   lightLinear: [number, number, number];
   output: "srgb8" | "p38" | "p3f16";
-  debugView?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  debugView?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
   /** Depth range highlighted by debug view 5. */
   zoneRange?: [number, number];
   /** Region index highlighted by debug view 4. */
@@ -237,7 +238,8 @@ export class Renderer {
     const base = this.toneUniforms(p, src, maps, o, lutSize, lutOn);
     // Tone uniforms, then tgt, hl, vig (amount, midpoint, feather, roundness), vig2 (vignette highlights, depth band edges near|middle, middle|far, band crossfade), hdr (on).
     // …, hdr, dsem (distance detail, 9 vec4), lay (layer count, atlas rows, distance bits).
-    const buf = new ArrayBuffer(base.byteLength + 80 + 144 + 16);
+    // …, lay, then the tone equalizer: teq (detail, mask exposure, mask contrast) and its 64-value curve.
+    const buf = new ArrayBuffer(base.byteLength + 80 + 144 + 16 + 16 + 256);
     new Uint8Array(buf).set(new Uint8Array(base));
     new Int32Array(buf, base.byteLength, 4).set([0, ty0, src.width, th]);
     new Float32Array(buf, base.byteLength + 16, 4).set([o.zoneRange?.[0] ?? -1, o.zoneRange?.[1] ?? 2, 0, 0]);
@@ -251,6 +253,11 @@ export class Renderer {
     let dbits = 0;
     DEPTH_BANDS.forEach((b, i) => { if (p.enable.semantic && !semNeutral(p.distance?.[b])) dbits |= 1 << i; });
     new Uint32Array(buf, base.byteLength + 224, 4).set([this.layerCount, this.atlasRows, dbits, p.protectHighlights === false ? 0 : 1]);
+    // Off unless it changes something — or its mask is being shown (view 9).
+    const eq = p.toneEq;
+    const eqOn = !!eq && eq.enabled && (toneEqActive(eq) || o.debugView === 9 || o.debugView === 10);
+    new Float32Array(buf, base.byteLength + 240, 4).set([eqOn ? TONE_EQ_DETAIL.indexOf(eq!.detail) : -1, eq?.maskExposure ?? 0, eq?.maskContrast ?? 1, 0]);
+    if (eqOn) new Float32Array(buf, base.byteLength + 256, 64).set(toneEqLut(eq!));
     const u = gpu.uniform(buf, "tone.u");
     const profU = gpu.uniform(profileUniforms(p.profile, profileOn, lutOn, lutSize), "profile.u");
     temp.push(u, profU);
@@ -282,7 +289,7 @@ export class Renderer {
     const { size: lutSize, identity } = this.ensureLuts(p, hdrStops);
     // The blur pass: depth of field, and/or Blur layers (a radius of 3 % of the long side at amount 1).
     const depthDof = dofOn && p.dof.strength > 0;
-    const blurR = o.debugView !== 7 && o.debugView !== 8 && hasBlurLayers(p.layers ?? [], p.autoCurves ?? 1, p.enable) ? 0.03 * Math.max(W, H) : 0;
+    const blurR = (o.debugView ?? 0) < 7 && hasBlurLayers(p.layers ?? [], p.autoCurves ?? 1, p.enable) ? 0.03 * Math.max(W, H) : 0;
     const dof = depthDof || blurR > 0;
     const maxRadius = depthDof ? p.dof.strength * 0.022 * Math.max(W, H) : 0;
     const y0 = strip?.y0 ?? 0, rows = strip?.rows ?? H;
@@ -318,7 +325,7 @@ export class Renderer {
       finalLinear = true;
     }
     const gr = p.grain;
-    if (gr && gr.amount > 0 && o.debugView !== 1 && o.debugView !== 2 && o.debugView !== 7 && o.debugView !== 8) {
+    if (gr && gr.amount > 0 && o.debugView !== 1 && o.debugView !== 2 && (o.debugView ?? 0) < 7) {
       // Last, on the finished image. Particle size is set for a ~12 MP frame and
       // scales with the image; `scale` is this render's pixels per full-image pixel.
       const sizePx = (0.7 + 2.3 * gr.size) * Math.max(W / scale, H / scale) / 4032;

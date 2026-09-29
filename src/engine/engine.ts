@@ -57,6 +57,7 @@ import { isPhone, phoneForced } from "../device.ts";
 import { levelsByArea, selectionMask } from "../refine/selection.ts";
 import { selectKey, type MaskShape } from "../layers/model.ts";
 import { liveLayers } from "../layers/gpu.ts";
+import { neutralToneEq, TONE_EQ_DETAIL, type MaskHist, type ToneEqDetail } from "../tone/toneEq.ts";
 import type { CheckItem, CheckInput } from "../analysis/check.ts";
 import type { FixChange } from "../analysis/checkFix.ts";
 // The check's code is loaded on the first check (src/analysis/check*.ts): not part of opening a photo.
@@ -167,7 +168,7 @@ export class Engine {
   /** An explicit depth range to highlight in view 5 (a distance band). */
   private viewRange?: [number, number];
   private previewLong = isMobile() ? 1600 : 2048;
-  private view: 0 | 1 | 2 | 4 | 5 | 6 = 0;
+  private view: 0 | 1 | 2 | 4 | 5 | 6 | 9 = 0;
   private region = 0;
   private before = false;
   private generation = 0;
@@ -814,6 +815,19 @@ export class Engine {
     this.dropThumb(); // look previews must see the restored image
   }
 
+  /** The tone-equalizer zone at x, y (0…1): its mask (view 9) at 384 px, read back. */
+  async toneEqZoneAt(x: number, y: number): Promise<number | undefined> {
+    const s = this.s;
+    if (!s) return undefined;
+    const t = await this.ensureThumb(384);
+    const p: Params = { ...s.params, toneEq: { ...(s.params.toneEq ?? neutralToneEq()), enabled: true }, enable: { ...s.params.enable, dof: false } };
+    const r = await this.renderer.render({ base: t.base, denoised: t.denoised, width: t.w, height: t.h, fullWidth: s.work.width }, s.maps, p,
+      { wb: this.wbFor(p), gain: s.gain, lightLinear: s.lightLinear, output: "p38", dither: false, debugView: 9 }, false);
+    const px = new Uint8Array(await this.gpu.readTexture(r.tex, 0, 0, t.w, t.h, 4));
+    const k = (Math.round(y * (t.h - 1)) * t.w + Math.round(x * (t.w - 1))) * 4;
+    return Math.round((px[k + 1] / 255) * 8);
+  }
+
   /**
    * A new open is on its way (called outside the queue, when the message arrives):
    * the open running now stops at its next check instead of finishing first — a
@@ -1027,7 +1041,7 @@ export class Engine {
     this.requestRender(!draft, draft);
   }
 
-  setView(view: 0 | 1 | 2 | 4 | 5 | 6, before = false, region = 0, range?: [number, number]) {
+  setView(view: 0 | 1 | 2 | 4 | 5 | 6 | 9, before = false, region = 0, range?: [number, number]) {
     this.view = view;
     this.region = region;
     this.viewRange = range;
@@ -1056,6 +1070,29 @@ export class Engine {
    * weighted as the renderer blends them. From the guide-resolution image the
    * refinement keeps, so it costs one small readback.
    */
+  /**
+   * The tone equalizer's mask as histograms (EV, 0.1 EV bins over −16 … +4), one per
+   * detail setting, as the photo renders now (the mask follows exposure and local tone):
+   * view 10 at 256 px, read back.
+   */
+  async toneEqHistograms(): Promise<Record<ToneEqDetail, MaskHist> | undefined> {
+    const s = this.s;
+    if (!s) return undefined;
+    const t = await this.ensureThumb(256);
+    const lo = -16, hi = 4, nb = 200;
+    const out = {} as Record<ToneEqDetail, MaskHist>;
+    for (const d of TONE_EQ_DETAIL) {
+      const p: Params = { ...s.params, toneEq: { ...(s.params.toneEq ?? neutralToneEq()), enabled: true, detail: d }, enable: { ...s.params.enable, dof: false } };
+      const r = await this.renderer.render({ base: t.base, denoised: t.denoised, width: t.w, height: t.h, fullWidth: s.work.width }, s.maps, p,
+        { wb: this.wbFor(p), gain: s.gain, lightLinear: s.lightLinear, output: "p38", dither: false, debugView: 10 }, false);
+      const px = new Uint8Array(await this.gpu.readTexture(r.tex, 0, 0, t.w, t.h, 4));
+      const bins = new Array(nb).fill(0);
+      for (let i = 1; i < px.length; i += 4) bins[Math.min(nb - 1, Math.floor((px[i] / 255) * nb))]++;
+      out[d] = { lo, hi, bins };
+    }
+    return out;
+  }
+
   private async depthBandHistograms(s: Session, b1: number, b2: number) {
     const m = s.maps, d = s.distCPU!;
     const lin = new Float32Array(m.w * m.h * 4);

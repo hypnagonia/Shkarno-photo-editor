@@ -92,7 +92,7 @@ for (const photo of photos) {
   rmSync(REPORT, { force: true });
   // A folder is a series (merged by the "burst" step); a file is one photo.
   const what = photo.includes("/") ? `set=${encodeURIComponent(photo)}` : `photo=${encodeURIComponent(photo)}`;
-  const b = launch(`http://localhost:${port}/?autotest&phone&close&${what}&steps=${stepsFor(photo)}${flag("save") ? "&save" : ""}&run=${Date.now()}`);
+  const b = launch(`http://localhost:${port}/?autotest&phone&close&${what}&steps=${stepsFor(photo)}${flag("save") ? "&save" : ""}${opt("teq") ? `&teq=${opt("teq")}` : ""}&run=${Date.now()}`);
   console.log(`\n${photo} (${browser}): ${stepsFor(photo)}`);
   const peaks = new Map(); // step → { page, gpu, tracked }
   let stage = "load", sub = "", done = "", message = "", gpuBase = -1, seen = 0;
