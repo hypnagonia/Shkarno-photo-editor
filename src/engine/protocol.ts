@@ -100,7 +100,7 @@ export type FromWorker =
   /** Automatic exposure corrected after measuring the first preview against the camera's rendering. */
   | { type: "exposureCalibrated"; exposure: number; note: string }
   /** Automatic settings corrected after opening (calibration to the camera): path → value, and what they were. */
-  | { type: "autoAdjusted"; changes: Record<string, number>; from: Record<string, number>; note: string }
+  | { type: "autoAdjusted"; changes: Record<string, number>; from: Record<string, number>; /** The paths the engine applied (the others were edited meanwhile). */ applied: string[]; note: string }
   | { type: "colorCalibrated"; saturation: number; vibrance: number; from: [number, number]; note: string }
   /** Black point matched to the camera's rendering: the master curve of the automatic "Black point" layer. */
   | { type: "blackPointMatched"; points: Array<{ x: number; y: number }>; note: string }

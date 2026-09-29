@@ -950,9 +950,14 @@ export class Engine {
           const note = `contrast matched to the camera's rendering: ${why.join("; ")}`;
           this.log(note);
           s.decision.params.tone = tone; s.decision.params.local = local;
-          const same = JSON.stringify(s.params.tone) === JSON.stringify(p.tone) && s.params.local.compression === p.local.compression;
-          if (same) s.params = { ...s.params, tone, local: { ...s.params.local, compression: local.compression } };
-          this.post({ type: "autoAdjusted", changes: { "tone.shadows": tone.shadows, "tone.highlights": tone.highlights, "local.compression": local.compression }, from: { "tone.shadows": p.tone.shadows, "tone.highlights": p.tone.highlights, "local.compression": p.local.compression }, note });
+          // Each value only where not edited while this frame rendered (the page decides the same way).
+          const cur = s.params;
+          const shadows = cur.tone.shadows === p.tone.shadows ? tone.shadows : cur.tone.shadows;
+          const highlights = cur.tone.highlights === p.tone.highlights ? tone.highlights : cur.tone.highlights;
+          const compression = cur.local.compression === p.local.compression ? local.compression : cur.local.compression;
+          s.params = { ...cur, tone: { ...cur.tone, shadows, highlights }, local: { ...cur.local, compression } };
+          const applied = [shadows === tone.shadows && "tone.shadows", highlights === tone.highlights && "tone.highlights", compression === local.compression && "local.compression"].filter((k): k is string => !!k);
+          this.post({ type: "autoAdjusted", changes: { "tone.shadows": tone.shadows, "tone.highlights": tone.highlights, "local.compression": local.compression }, from: { "tone.shadows": p.tone.shadows, "tone.highlights": p.tone.highlights, "local.compression": p.local.compression }, applied, note });
         }
         this.requestRender(true);
       } else if (s.calib.black && !s.calib.color) {

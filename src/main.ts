@@ -1777,11 +1777,20 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       // Part of opening the photo: the automatic values change, and the current ones where not edited meanwhile.
       if (opening) break;
       markCheckStale();
+      let changed = false, differs = false;
       for (const [k, v] of Object.entries(m.changes)) {
         if (autoParams) setPath(autoParams, k, v);
-        if (params && Math.abs(getPath(params, k) - m.from[k]) < 1e-6) setPath(params, k, v);
+        const take = !!params && getPath(params, k) === m.from[k];
+        if (take && v !== m.from[k]) { setPath(params!, k, v); changed = true; }
+        if (take !== m.applied.includes(k)) differs = true;
       }
-      if (params) { if (!history.canUndo) history.reset(params, t("hist.open")); rememberParams(params); syncControls(); }
+      if (params && changed) {
+        if (!history.canUndo) history.reset(params, t("hist.open"));
+        rememberParams(params);
+        syncControls();
+      }
+      // An edit of ours was still on its way to the engine when it decided: ours is what counts.
+      if (params && differs) send({ type: "params", params: structuredClone(params), draft: false });
       logLines.push(m.note);
       break;
     }

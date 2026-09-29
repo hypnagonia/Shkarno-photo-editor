@@ -138,6 +138,7 @@ export async function runAutotest(app: AutotestApp) {
       }
       else if (s.startsWith("off-")) {
         // One stage off (off-semantic, off-curves, off-localTone, off-dehaze, off-color…), exported as off-<stage>.
+        // Stays off for the following steps, like the others: off-dehaze,off-semantic is both.
         const p = app.params(); if (!p) throw new Error("no photo");
         const k = s.slice(4);
         const done = finalPreview(s);
@@ -147,7 +148,6 @@ export async function runAutotest(app: AutotestApp) {
         else if (k === "layers") p.layers = [];
         app.pushParams(); await done; await settle();
         if (q.has("save")) await saveExport(s);
-        if (k in e) e[k] = true;
       }
       else if (s === "zero") { const done = finalPreview("zero"); app.zero(); await done; await settle(); if (q.has("save")) await saveExport("zero"); }
       else if (s === "ceq") {
