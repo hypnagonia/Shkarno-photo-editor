@@ -867,6 +867,7 @@ export class Engine {
     p.color = { saturation: 0, vibrance: 0 };
     if (p.vignette) p.vignette = { ...p.vignette, amount: 0 };
     if (p.grain) p.grain = { ...p.grain, amount: 0 };
+    if (p.film) p.film = { ...p.film, character: "off" };
     p.profile = neutralProfile();
     return p;
   }

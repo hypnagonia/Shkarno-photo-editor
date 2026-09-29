@@ -21,6 +21,9 @@ import detailWgsl from "../gpu/shaders/render_detail.wgsl?raw";
 import dofWgsl from "../gpu/shaders/render_dof.wgsl?raw";
 import outputWgsl from "../gpu/shaders/output.wgsl?raw";
 import grainWgsl from "../gpu/shaders/render_grain.wgsl?raw";
+import filmWgsl from "../gpu/shaders/render_film.wgsl?raw";
+import filmGlowWgsl from "../gpu/shaders/film_glow.wgsl?raw";
+import { filmOf, filmUniforms } from "../film/film.ts";
 import gainmapWgsl from "../gpu/shaders/render_gainmap.wgsl?raw";
 import { floatsToHalves } from "../gpu/half.ts";
 import { CURVE_LUT_SIZE, TONE_LUT_SIZE, curveLUT, isFlat, toneCurveLUT } from "./curves.ts";
@@ -255,6 +258,35 @@ export class Renderer {
     }
     return t;
   }
+  /**
+   * The film's glow over the whole frame at low resolution (so strips of an export all
+   * see every light): rgb bloom, a halation, blurred (render_film.wgsl, film_glow.wgsl).
+   */
+  private async filmGlow(src: RenderSource, p: Params, o: RenderOptions, fu: NonNullable<ReturnType<typeof filmUniforms>>): Promise<GPUTexture> {
+    const gpu = this.gpu;
+    const { width: W, height: H } = src;
+    const k = 384 / Math.max(W, H);
+    const gw = Math.max(1, Math.round(W * Math.min(k, 1))), gh = Math.max(1, Math.round(H * Math.min(k, 1)));
+    const a = this.target("glowA", gw, gh, "rgba16float"), b = this.target("glowB", gw, gh, "rgba16float");
+    const long = Math.max(gw, gh);
+    const wb = o.wb;
+    // Thresholds relative to what the rendering makes white: the subject's key is shown near
+    // middle grey, display white is ≈ 2.5 stops above it; bloom from 3 stops, halation from 4.
+    const key = 2 ** ((p.local?.anchorEV ?? Math.log2(0.18)) + p.exposure);
+    await gpu.run("render.filmGlow", (enc, temp) => {
+      const us = gpu.uniform(new Uniforms(24).u32(gw, gh, W, H).f32(wb[0], wb[1], wb[2], 0, wb[3], wb[4], wb[5], 0, wb[6], wb[7], wb[8], 0)
+        .f32(2 ** p.exposure, key * 8, key * 16, 3).f32(0, 0, 0, 0).bytes(), "filmGlow.u");
+      const blur = (horizontal: boolean) => gpu.uniform(new Uniforms(24).u32(gw, gh, horizontal ? 1 : 0, 0).f32(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        .f32(fu.bloomR * long, fu.halationR * long, 0, 0).bytes(), "filmGlow.b");
+      const uh = blur(true), uv = blur(false);
+      temp.push(us, uh, uv);
+      gpu.dispatch(enc, gpu.pipeline("film.glowSrc", filmGlowWgsl, "glow_src"), [us, src.base.createView(), a.createView()], Math.ceil(gw / 8), Math.ceil(gh / 8));
+      gpu.dispatch(enc, gpu.pipeline("film.glowBlur", filmGlowWgsl, "glow_blur"), [uh, a.createView(), b.createView()], Math.ceil(gw / 8), Math.ceil(gh / 8));
+      gpu.dispatch(enc, gpu.pipeline("film.glowBlur", filmGlowWgsl, "glow_blur"), [uv, b.createView(), a.createView()], Math.ceil(gw / 8), Math.ceil(gh / 8));
+    });
+    return a;
+  }
+
   /** Frees all cached render targets (after an export, or when a photo closes). */
   releaseTargets() {
     for (const t of this.targets.values()) this.gpu.release(t);
@@ -364,8 +396,24 @@ export class Renderer {
       final = await this.depthOfField(t2, t1, distT, W, th, p, maxRadius, dofLevels, blurR, depthDof);
       finalLinear = true;
     }
+    const film = filmOf(p);
+    const fu = film && o.debugView !== 1 && o.debugView !== 2 && (o.debugView ?? 0) < 7 ? filmUniforms(film, Math.max(src.fullWidth, (H / scale))) : undefined;
+    if (fu) {
+      // Last, on the finished image: softness, halation and bloom, the print's shoulder, grain.
+      const glow = fu.halation > 0 || fu.bloom > 0 ? await this.filmGlow(src, p, o, fu) : undefined;
+      const out = final === t1 ? t2 : t1;
+      await gpu.run("render.film", (enc, temp) => {
+        const u = gpu.uniform(new Uniforms(16).u32(W, th, ty0, finalLinear ? 1 : 0)
+          .f32(...fu.grain)
+          .f32(1 / scale, o.draft ? 1 : 0, fu.softPx * scale, fu.shoulder)
+          .f32(fu.halation, fu.bloom, glow ? 1 : 0, H).bytes(), "film.u");
+        temp.push(u);
+        gpu.dispatch(enc, gpu.pipeline("render.film", filmWgsl), [u, final.createView(), out.createView(), (glow ?? this.target("glowDummy", 1, 1, "rgba16float")).createView(), this.sampler], Math.ceil(W / 8), Math.ceil(th / 8));
+      });
+      final = out;
+    }
     const gr = p.grain;
-    if (gr && gr.amount > 0 && o.debugView !== 1 && o.debugView !== 2 && (o.debugView ?? 0) < 7) {
+    if (!p.film && gr && gr.amount > 0 && o.debugView !== 1 && o.debugView !== 2 && (o.debugView ?? 0) < 7) {
       // Last, on the finished image. Particle size is set for a ~12 MP frame and
       // scales with the image; `scale` is this render's pixels per full-image pixel.
       const sizePx = (0.7 + 2.3 * gr.size) * Math.max(W / scale, H / scale) / 4032;

@@ -136,6 +136,25 @@ export async function runAutotest(app: AutotestApp) {
         app.pushParams(); await done; await settle();
         if (q.has("save")) await saveExport("classic");
       }
+      else if (s.startsWith("film-")) {
+        // A film character at full strength on 35 mm (film-clean, film-negative, film-cinema), exported as film-<character>.
+        const p = app.params(); if (!p) throw new Error("no photo");
+        const done = finalPreview(s);
+        p.film = { character: s.slice(5) as NonNullable<typeof p.film>["character"], strength: 1, format: 36 };
+        app.pushParams(); await done; await settle();
+        if (q.has("save")) await saveExport(s);
+      }
+      else if (s.startsWith("set:")) {
+        // One setting by path (set:semantic.person.exposure=0), exported as set-<path>.
+        const p = app.params(); if (!p) throw new Error("no photo");
+        const [path, v] = s.slice(4).split("=");
+        const ks = path.split(".");
+        const o = ks.slice(0, -1).reduce((a: Record<string, unknown>, k) => a[k] as Record<string, unknown>, p as unknown as Record<string, unknown>);
+        const done = finalPreview(s);
+        o[ks[ks.length - 1]] = Number(v);
+        app.pushParams(); await done; await settle();
+        if (q.has("save")) await saveExport(`set-${path}`);
+      }
       else if (s.startsWith("off-")) {
         // One stage off (off-semantic, off-curves, off-localTone, off-dehaze, off-color…), exported as off-<stage>.
         // Stays off for the following steps, like the others: off-dehaze,off-semantic is both.

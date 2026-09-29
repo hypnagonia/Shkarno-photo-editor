@@ -44,6 +44,8 @@ type Ctx = {
   /** Panels of their own in the dock (tone / contrast equalizers): element, shown, left. */
   toneEq?: { el: HTMLElement; render: () => void; leave: () => void };
   contrastEq?: { el: HTMLElement; render: () => void; leave: () => void };
+  /** The Film card: grain, halation, glow (src/ui/filmPanel.ts). */
+  film?: { el: HTMLElement; render: () => void; leave: () => void };
   /** Taps on the photo pick what to mask (on, with a hint for the photo) or do what they normally do (off). */
   pickMode: (on: boolean, hint?: string) => void;
   /** A short message on the photo. */
@@ -56,7 +58,7 @@ type Ctx = {
 
 /** Layer types in the ＋ sheet (each type's icon has the type's name). */
 /** The cards that are not layers: always there, at the bottom of the stack. */
-type Fixed = "develop" | "toneEq" | "contrastEq" | "blur";
+type Fixed = "develop" | "toneEq" | "contrastEq" | "blur" | "film";
 
 const ADD: LayerType[] = ["curves", "hueSat", "basic", "blur", "gradientMap", "gradientFill", "brightContrast", "exposure"];
 
@@ -152,7 +154,7 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
   }
 
   function renderDock() {
-    list.replaceChildren(...[...layers()].reverse().map((l) => card(l)), card(undefined, "develop"), ...(ctx.toneEq ? [card(undefined, "toneEq")] : []), ...(ctx.contrastEq ? [card(undefined, "contrastEq")] : []), card(undefined, "blur"));
+    list.replaceChildren(...[...layers()].reverse().map((l) => card(l)), card(undefined, "develop"), ...(ctx.toneEq ? [card(undefined, "toneEq")] : []), ...(ctx.contrastEq ? [card(undefined, "contrastEq")] : []), card(undefined, "blur"), ...(ctx.film ? [card(undefined, "film")] : []));
     list.querySelector(".lay-card.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
@@ -701,11 +703,11 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     curvesUi = undefined;
     const l = sel();
     if (!l) {
-      if (selected !== "blur" && selected !== "toneEq" && selected !== "contrastEq") selected = "develop";
+      if (selected !== "blur" && selected !== "toneEq" && selected !== "contrastEq" && selected !== "film") selected = "develop";
       if (selected !== "blur") ctx.leftBlur?.();
       if (selected !== "toneEq") ctx.toneEq?.leave();
       if (selected !== "contrastEq") ctx.contrastEq?.leave();
-      const own = selected === "toneEq" ? ctx.toneEq : selected === "contrastEq" ? ctx.contrastEq : undefined;
+      const own = selected === "toneEq" ? ctx.toneEq : selected === "contrastEq" ? ctx.contrastEq : selected === "film" ? ctx.film : undefined;
       if (own) { props.replaceChildren(own.el); own.render(); }
       else props.replaceChildren(selected === "blur" ? ctx.blur : ctx.develop);
       applyMaskView();

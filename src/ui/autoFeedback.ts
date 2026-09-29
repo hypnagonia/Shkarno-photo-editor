@@ -17,7 +17,7 @@ const PATHS = [
   "tone.highlights", "tone.shadows", "tone.whites", "tone.blacks", "tone.contrast", "tone.rolloff",
   "local.compression", "local.clarity", "local.texture",
   "color.saturation", "color.vibrance", "dehaze.strength",
-  "denoise.luma", "denoise.chroma", "sharpen.amount", "vignette.amount", "grain.amount",
+  "denoise.luma", "denoise.chroma", "sharpen.amount", "vignette.amount", "grain.amount", "film.strength",
   "autoCurves", "render.purity", "render.strength", "hdr.headroom",
 ];
 

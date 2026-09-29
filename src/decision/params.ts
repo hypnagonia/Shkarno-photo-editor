@@ -171,6 +171,14 @@ export interface Params {
    * (0 = monochrome grain, 1 = dye-cloud colour grain).
    */
   grain: { amount: number; size: number; roughness: number; color: number };
+  /**
+   * Film (its own card): a character of analog rendering — grain from the emulsion,
+   * halation, glow, softness (src/film/film.ts) — at a strength 0 … 1.5 (1 = as that
+   * film shows it), on a frame of a format (the long side in mm: 36 = 35 mm, 70 = 6×7,
+   * 125 = 4×5; a larger negative shows finer grain and tighter halation).
+   * Absent = off (and `grain` above, from edits saved before, renders as it did).
+   */
+  film?: Film;
   /** Tone equalizer (src/tone/toneEq.ts): exposure by brightness zone of a smoothed mask. Absent = off. */
   toneEq?: ToneEq;
   /**
@@ -240,6 +248,9 @@ export function defaultParams(): Params {
     render: { engine: "img", purity: 0, strength: 1 },
   };
 }
+
+export type FilmCharacter = "off" | "clean" | "negative" | "cinema";
+export interface Film { character: FilmCharacter; strength: number; format: number }
 
 /** One inspectable automatic decision. */
 export interface Decision {

@@ -6,6 +6,7 @@ import "./styles.css";
 import type { Capabilities, ExportFormat, FromWorker, StageProfile, Summary, ToWorker, UpscaleInfo, UpscaleMode } from "./engine/protocol.ts";
 import { createToneEqPanel } from "./ui/toneEqPanel.ts";
 import { createContrastEqPanel } from "./ui/contrastEqPanel.ts";
+import { createFilmPanel } from "./ui/filmPanel.ts";
 import { clearFeedback, feedbackBlob, feedbackCount, recordEdit } from "./ui/autoFeedback.ts";
 import { DEPTH_BANDS, defaultParams, type Decision, type DepthBand, type Params } from "./decision/params.ts";
 import { createLookPanel } from "./ui/lookPanel.ts";
@@ -933,12 +934,6 @@ adjustPane.append(
   slider({ path: "vignette.feather", label: t("adj.vigFeather"), min: 0, max: 1, step: 0.01, fmt: pct }),
   slider({ path: "vignette.roundness", label: t("adj.vigRoundness"), min: 0, max: 1, step: 0.01, fmt: pct }),
   slider({ path: "vignette.highlights", label: t("adj.vigHighlights"), min: 0, max: 1, step: 0.01, fmt: pct }),
-  el("div", { class: "group-title", text: t("adj.grain") }),
-  slider({ path: "grain.amount", label: t("adj.grainAmount"), min: 0, max: 1, step: 0.01, fmt: pct }),
-  slider({ path: "grain.size", label: t("adj.grainSize"), min: 0, max: 1, step: 0.01, fmt: pct }),
-  slider({ path: "grain.roughness", label: t("adj.grainRoughness"), min: 0, max: 1, step: 0.01, fmt: pct }),
-  slider({ path: "grain.color", label: t("adj.grainColour"), min: 0, max: 1, step: 0.01, fmt: pct }),
-  el("p", { class: "muted", text: t("adj.grainHint") }),
 );
 // Curves for this photo (L, R, G, B), independent of the look's own curves and of
 // the per-region curves (Regions tab): tone-range sliders (src/ui/toneCurves.ts).
@@ -1005,6 +1000,7 @@ function neutralParams(p: Params): Params {
   n.autoCurves = 0;
   if (n.vignette) n.vignette = { ...n.vignette, amount: 0 };
   if (n.grain) n.grain = { ...n.grain, amount: 0 };
+  if (n.film) n.film = { ...n.film, character: "off" };
   n.layers = (p.layers ?? []).filter((l) => !l.auto);
   return n;
 }
@@ -1074,6 +1070,11 @@ const toneEqPanel = createToneEqPanel({
   pickMode: (on) => { toneEqPicking = on && !!params; },
 });
 
+const filmPanel = createFilmPanel({
+  params: () => params,
+  changed: (label) => { nextLabel = label; pushParams(); },
+});
+
 // Regions: per-segment controls (src/ui/regionsPanel.ts)
 const layersPanel = createLayersPanel(dockEl, propsEl, {
   params: () => params,
@@ -1088,6 +1089,7 @@ const layersPanel = createLayersPanel(dockEl, propsEl, {
   blur: blurEl,
   toneEq: toneEqPanel,
   contrastEq: contrastEqTab,
+  film: filmPanel,
   photoColors: () => askEngine({ type: "palette" }, (m) => (m.type === "palette" ? m.stats.palette.map((w) => w.hex) : undefined), [] as string[]),
   notice: (text) => { badge.textContent = text; badge.classList.add("on"); },
   brightest: () => askEngine({ type: "brightest" }, (m) => (m.type === "brightest" ? { x: m.x, y: m.y } : undefined), { x: 0.3, y: 0.2 }),
