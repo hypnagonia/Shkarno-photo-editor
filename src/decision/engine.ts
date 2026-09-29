@@ -400,8 +400,10 @@ export function decide(ctx: EngineContext): DecisionResult {
       }
       case "person": {
         // Natural skin: no extra saturation/texture; gentle fill light if the subject is underexposed vs the scene.
+        // At most +0.3 EV: the fill is a flat gain under a soft mask, and beyond that its edge
+        // shows — a light rim on the wall around the person (a cut-out look).
         const under = (keyEV - s.meanEV);
-        a.exposure = r2(clamp((under - 0.6) * 0.45, 0, 0.7));
+        a.exposure = r2(clamp((under - 0.6) * 0.45, 0, 0.3));
         a.saturation = r2(clamp((0.06 - lch.C) * 0.5, -0.06, 0));
         a.vibrance = -0.6; a.texture = 0.25; a.clarity = 0.35; a.sharpen = 0.55; a.denoise = 1.0; a.dehaze = 0.3;
         why.push(`people: skin protected (vibrance ×0.4, texture ×0.25)` + (a.exposure > 0 ? `; ${under.toFixed(2)} EV darker than the scene key → +${a.exposure} EV fill` : ""));
