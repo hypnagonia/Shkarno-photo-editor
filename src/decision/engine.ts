@@ -296,7 +296,12 @@ export function decide(ctx: EngineContext): DecisionResult {
 
   // --------------------------------------------------------------- dehaze
   {
-    const far = (["terrain", "building", "vegetation", "water"] as Group[]).filter((g) => present(g) && G[g].dist > 0.55);
+    // Haze is atmosphere: outdoors only. Without sky, "building" at a distance is a room's
+    // far wall (a sunlit orange wall was "dehazed" into a red blotch), and a clear interior
+    // gets none at all.
+    const indoors = !present("sky") && (present("interior") ? G.interior.area : 0) > 0.1;
+    const farKinds: Group[] = present("sky") ? ["terrain", "building", "vegetation", "water"] : ["terrain", "vegetation", "water"];
+    const far = indoors ? [] : farKinds.filter((g) => present(g) && G[g].dist > 0.55);
     const near = (["terrain", "building", "vegetation", "ground", "person", "vehicle", "interior", "other"] as Group[]).filter((g) => present(g) && G[g].dist < 0.45);
     const wmean = (gs: Group[], f: (s: RegionStats) => number) => {
       let a = 0, w = 0;
@@ -306,7 +311,7 @@ export function decide(ctx: EngineContext): DecisionResult {
     const dcFar = wmean(far, (s) => s.darkChannel), dcNear = wmean(near, (s) => s.darkChannel);
     const lcFar = wmean(far, (s) => s.localContrast), lcNear = wmean(near, (s) => s.localContrast);
     let score = 0;
-    let why = "no distant landscape/architecture — nothing to dehaze";
+    let why = indoors ? "indoors (no sky, interior) — no atmosphere to remove" : "no distant landscape/architecture — nothing to dehaze";
     if (far.length && Number.isFinite(dcFar)) {
       const veil = smooth(0.18, 0.45, dcFar - (Number.isFinite(dcNear) ? dcNear * 0.5 : 0));
       const flat = Number.isFinite(lcNear) && lcNear > 0 ? smooth(0.1, 0.6, 1 - lcFar / lcNear) : 0.5;

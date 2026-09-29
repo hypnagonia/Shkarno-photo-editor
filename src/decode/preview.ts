@@ -101,7 +101,10 @@ export function shadowMatch(ours: number[], ref: number[], oursHi?: number[], re
     for (let i = 0; i < oursHi.length; i++) {
       const x = oursHi[i], prev = pts[pts.length - 1];
       if (x <= prev.x + 0.02 || x >= 0.985) continue;
-      let y = x + Math.max(-MAX, Math.min(MAX, SHARE * (refHi[i] - x)));
+      // (Highlights may move further: a lifted white is a gentle change, a lifted black is not.)
+      // (Only this far: a steep curve over a smooth sky gradient draws edges into it.)
+      const MAXH = 45 / 255;
+      let y = x + Math.max(-MAXH, Math.min(MAXH, SHARE * (refHi[i] - x)));
       y = Math.max(y, prev.y + (x - prev.x) * 0.35);
       y = Math.min(y, prev.y + (x - prev.x) * 2.5, 0.995);
       moved = Math.max(moved, Math.abs(y - x));

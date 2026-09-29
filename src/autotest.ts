@@ -40,6 +40,7 @@ export async function runAutotest(app: AutotestApp) {
     if (m.type === "error") void report("error", { message: m.message });
     // A GPU validation error drops that dispatch silently (the result is just wrong): fail the run.
     if (m.type === "log" && /^GPU error/.test(m.text)) void report("gpuerror", { message: m.text });
+    if (m.type === "analysis" && q.has("logs")) for (const d of m.decisions) void report("log", { text: `decision ${d.id}: ${JSON.stringify(d.value)} — ${d.reason}` });
     if (m.type === "log" && (q.has("logs") || /^(Apple mattes|auto focus)/.test(m.text))) void report("log", { text: m.text });
   });
   const waitFor = (pred: (m: FromWorker) => boolean, what: string, ms = 240_000) => new Promise<FromWorker>((resolve, reject) => {
@@ -134,6 +135,19 @@ export async function runAutotest(app: AutotestApp) {
         p.render = { ...(p.render ?? { purity: 0, strength: 1 }), engine: "classic" };
         app.pushParams(); await done; await settle();
         if (q.has("save")) await saveExport("classic");
+      }
+      else if (s.startsWith("off-")) {
+        // One stage off (off-semantic, off-curves, off-localTone, off-dehaze, off-color…), exported as off-<stage>.
+        const p = app.params(); if (!p) throw new Error("no photo");
+        const k = s.slice(4);
+        const done = finalPreview(s);
+        const e = p.enable as Record<string, boolean>;
+        if (k in e) e[k] = false;
+        else if (k === "color") p.color = { saturation: 0, vibrance: 0 };
+        else if (k === "layers") p.layers = [];
+        app.pushParams(); await done; await settle();
+        if (q.has("save")) await saveExport(s);
+        if (k in e) e[k] = true;
       }
       else if (s === "zero") { const done = finalPreview("zero"); app.zero(); await done; await settle(); if (q.has("save")) await saveExport("zero"); }
       else if (s === "ceq") {

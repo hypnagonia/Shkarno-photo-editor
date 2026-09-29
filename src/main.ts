@@ -1773,6 +1773,18 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       syncControls();
       break;
     }
+    case "autoAdjusted": {
+      // Part of opening the photo: the automatic values change, and the current ones where not edited meanwhile.
+      if (opening) break;
+      markCheckStale();
+      for (const [k, v] of Object.entries(m.changes)) {
+        if (autoParams) setPath(autoParams, k, v);
+        if (params && Math.abs(getPath(params, k) - m.from[k]) < 1e-6) setPath(params, k, v);
+      }
+      if (params) { if (!history.canUndo) history.reset(params, t("hist.open")); rememberParams(params); syncControls(); }
+      logLines.push(m.note);
+      break;
+    }
     case "colorCalibrated": {
       // Part of opening the photo, like the exposure calibration.
       if (opening) break;

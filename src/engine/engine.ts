@@ -99,7 +99,7 @@ interface Session {
    * final previews are measured and the automatic exposure corrected (≤ 2 rounds),
    * unless the exposure was changed by then.
    */
-  calib?: { ref: number[]; refHi?: number[]; rounds: number; black: boolean; chroma?: number; chroma95?: number; color?: boolean };
+  calib?: { ref: number[]; refHi?: number[]; rounds: number; black: boolean; chroma?: number; chroma95?: number; color?: boolean; contrast?: boolean };
   /** Preview proxy. `owned` is false when it aliases the working textures (image ≤ preview size). */
   proxy?: { base: GPUTexture; denoised: GPUTexture; w: number; h: number; owned: boolean };
   /** Quarter-pixel proxy used while a slider is being dragged. */
@@ -927,13 +927,33 @@ export class Engine {
       if (s.calib.rounds < 2 && Math.abs(ours - ref) > 6 / 255) {
         s.calib.rounds++;
         const d = Math.log2(Math.max(srgbEotf(ref), 1e-4) / Math.max(srgbEotf(ours), 1e-4));
-        const ev = Math.round(Math.min(2.5, Math.max(-1.5, p.exposure + 0.9 * d)) * 100) / 100;
+        const ev = Math.round(Math.min(2.5, Math.max(-3, p.exposure + 0.9 * d)) * 100) / 100;
         const note = `measured on the preview: median ${Math.round(ours * 255)}/255 vs the camera's ${Math.round(ref * 255)}/255 → ${ev > 0 ? "+" : ""}${ev} EV`;
         this.log(`exposure calibration: ${note}`);
         s.decision.params.exposure = ev;
         // Not over an edit that arrived while this frame rendered.
         if (s.params.exposure === p.exposure) s.params = { ...s.params, exposure: ev };
         this.post({ type: "exposureCalibrated", exposure: ev, note });
+        this.requestRender(true);
+      } else if (!s.calib.contrast && !s.calib.black && calibHi && s.calib.refHi) {
+        // Exposure settled, but the camera's shadows much deeper / highlights much brighter
+        // (a contrasty backlit or golden-hour scene we flattened): take back the automatic
+        // shadow lift and highlight compression first — a curve alone moves tones too little.
+        s.calib.contrast = true;
+        const deeper = calib[REF_QS.indexOf(0.05)] - s.calib.ref[REF_QS.indexOf(0.05)]; // > 0: ours lifted
+        const brighter = s.calib.refHi[2] - calibHi[2]; // > 0: the camera's highlights brighter (98 %)
+        const tone = { ...p.tone }, local = { ...p.local };
+        const why: string[] = [];
+        if (deeper > 10 / 255 && tone.shadows > 0) { const k = Math.max(0, 1 - deeper / (40 / 255)); tone.shadows = Math.round(tone.shadows * k * 100) / 100; local.compression = Math.round(local.compression * (0.5 + 0.5 * k) * 100) / 100; why.push(`shadows ${Math.round(deeper * 255)}/255 lighter than the camera's → shadow lift ${tone.shadows}`); }
+        if (brighter > 20 / 255 && tone.highlights < 0) { tone.highlights = Math.round(tone.highlights * Math.max(0, 1 - brighter / (60 / 255)) * 100) / 100; why.push(`highlights ${Math.round(brighter * 255)}/255 dimmer than the camera's → highlight compression ${tone.highlights}`); }
+        if (why.length) {
+          const note = `contrast matched to the camera's rendering: ${why.join("; ")}`;
+          this.log(note);
+          s.decision.params.tone = tone; s.decision.params.local = local;
+          const same = JSON.stringify(s.params.tone) === JSON.stringify(p.tone) && s.params.local.compression === p.local.compression;
+          if (same) s.params = { ...s.params, tone, local: { ...s.params.local, compression: local.compression } };
+          this.post({ type: "autoAdjusted", changes: { "tone.shadows": tone.shadows, "tone.highlights": tone.highlights, "local.compression": local.compression }, from: { "tone.shadows": p.tone.shadows, "tone.highlights": p.tone.highlights, "local.compression": p.local.compression }, note });
+        }
         this.requestRender(true);
       } else if (s.calib.black && !s.calib.color) {
         // Exposure and black point settled: colourfulness, to the camera's (the automatic
