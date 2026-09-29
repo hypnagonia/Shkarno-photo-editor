@@ -24,16 +24,9 @@ const localTesting: Array<[string, Mw]> = [
   }],
   ["/__samples", (req, res, next) => {
     const name = decodeURIComponent((req.url ?? "").split("?")[0].replace(/^\//, ""));
-    // A file, or a series folder (burst/<set>/: its files as a JSON list).
-    if (!/^[\w.\-]+(\/[\w.\-]+){0,2}\/?$/.test(name) || name.split("/").includes("..")) return next();
+    if (!/^[\w.\-]+$/.test(name)) return next();
     try {
-      const path = join(".samples", name);
-      if (statSync(path).isDirectory()) {
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify(readdirSync(path).filter((f) => !f.startsWith(".")).sort()));
-        return;
-      }
-      const data = readFileSync(path);
+      const data = readFileSync(join(".samples", name));
       res.setHeader("Content-Type", "application/octet-stream");
       res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
       res.end(data);

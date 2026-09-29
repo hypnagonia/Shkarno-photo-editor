@@ -8,7 +8,6 @@
  *   npm run memcheck -- --photo IMG_1514.DNG --steps open,select
  *   npm run memcheck -- --browser safari     real WebKit (needs WebGPU: macOS 26)
  *   npm run memcheck -- --no-build
- *   npm run memcheck -- --photo burst/b3 --steps burst,ab   a series (a folder in .samples)
  *
  * How: `vite preview` serves the production build; the browser opens
  * /?autotest&phone&… (src/autotest.ts), which behaves exactly as on an iPhone
@@ -33,8 +32,7 @@ const budget = budgetAll[browser];
 if (!budget) { console.error(`no budget for browser "${browser}"`); process.exit(2); }
 const photos = (opt("photo") ?? budgetAll.photos.join(",")).split(",");
 const stepsOpt = opt("steps");
-/** Steps for a photo, or for a series (a folder: merged by the "burst" step). */
-const stepsFor = (photo) => stepsOpt ?? (photo.includes("/") ? budgetAll.seriesSteps : budgetAll.steps).join(",");
+const stepsFor = () => stepsOpt ?? budgetAll.steps.join(",");
 const port = Number(opt("port", "5399"));
 const REPORT = ".samples/out/autotest.jsonl";
 
@@ -90,8 +88,7 @@ let failed = false;
 for (const photo of photos) {
   if (!existsSync(`.samples/${photo}`)) { console.log(`skip ${photo}: not in .samples`); continue; }
   rmSync(REPORT, { force: true });
-  // A folder is a series (merged by the "burst" step); a file is one photo.
-  const what = photo.includes("/") ? `set=${encodeURIComponent(photo)}` : `photo=${encodeURIComponent(photo)}`;
+  const what = `photo=${encodeURIComponent(photo)}`;
   const b = launch(`http://localhost:${port}/?autotest&phone&close&${what}&steps=${stepsFor(photo)}${flag("save") ? "&save" : ""}${opt("teq") ? `&teq=${opt("teq")}` : ""}${opt("ceq") ? `&ceq=${opt("ceq")}` : ""}&run=${Date.now()}`);
   console.log(`\n${photo} (${browser}): ${stepsFor(photo)}`);
   const peaks = new Map(); // step → { page, gpu, tracked }

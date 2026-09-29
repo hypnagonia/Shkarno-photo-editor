@@ -42,16 +42,13 @@ async function handle(m: ToWorker) {
       break;
     }
     case "open":
-      await engine.open(m.file, m.resolution, m.autoExposure, m.autoDof, m.upscale, m.safeAnalysis, m.analysis, m.series);
+      await engine.open(m.file, m.resolution, m.autoExposure, m.autoDof, m.upscale, m.safeAnalysis, m.analysis);
       break;
     case "toneEqHist":
       post({ type: "toneEqHist", hist: await engine.toneEqHistograms() });
       break;
     case "toneEqZone":
       post({ type: "toneEqZone", zone: await engine.toneEqZoneAt(m.x, m.y) });
-      break;
-    case "seriesView":
-      await engine.seriesView(m.single);
       break;
     case "upscale-now":
       engine.forceUpscale();

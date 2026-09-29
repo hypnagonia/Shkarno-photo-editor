@@ -3,8 +3,7 @@
  * everything else to the engine worker. No pixel processing happens here.
  */
 import "./styles.css";
-import type { Capabilities, ExportFormat, FromWorker, SeriesInfo, StageProfile, Summary, ToWorker, UpscaleInfo, UpscaleMode } from "./engine/protocol.ts";
-import { openSeriesSheet } from "./ui/seriesSheet.ts";
+import type { Capabilities, ExportFormat, FromWorker, StageProfile, Summary, ToWorker, UpscaleInfo, UpscaleMode } from "./engine/protocol.ts";
 import { createToneEqPanel } from "./ui/toneEqPanel.ts";
 import { createContrastEqPanel } from "./ui/contrastEqPanel.ts";
 import { DEPTH_BANDS, defaultParams, type Decision, type DepthBand, type Params } from "./decision/params.ts";
@@ -20,7 +19,7 @@ import { AUTO_LAYERS_VERSION } from "./layers/auto.ts";
 import { histogramOf } from "./analysis/previewHist.ts";
 import { applyAutoCurves, type AutoCurveBands } from "./decision/autoCurves.ts";
 import { isFlat } from "./render/curves.ts";
-import { consumeCrash, crashInfo, crashedInAnalysis, crashedWhileProcessing, forgetPendingParams, lastStage, markCompleted, markInflight, noteAnalysis, noteStage, rememberParams, rememberPhoto, forgetPhoto, restorablePhoto } from "./ui/session.ts";
+import { consumeCrash, crashInfo, crashedInAnalysis, crashedWhileProcessing, forgetPendingParams, lastStage, markCompleted, markInflight, noteAnalysis, noteStage, rememberParams, rememberPhoto, restorablePhoto } from "./ui/session.ts";
 import { LANGS, LANG_NAMES, lang, setLang, storedLang, t, tOr, type Lang } from "./ui/i18n.ts";
 import { el } from "./ui/dom.ts";
 import { autotestAllowed } from "./autotest.ts";
@@ -80,7 +79,7 @@ let canvas = el("canvas");
 const badge = el("div", { class: "badge" });
 const rings = el("div", { class: "rings" });
 const progress = el("div", { class: "progress" }, el("div", { class: "t" }), el("div", { class: "bar indet" }, el("i")));
-const fileInput = el("input", { type: "file", multiple: "", accept: ".dng,.DNG,.heic,.HEIC,.heif,.jpg,.jpeg,.png,image/*,image/x-adobe-dng", style: "display:none" });
+const fileInput = el("input", { type: "file", accept: ".dng,.DNG,.heic,.HEIC,.heif,.jpg,.jpeg,.png,image/*,image/x-adobe-dng", style: "display:none" });
 const empty = el("div", { class: "empty" },
   el("h2", { text: t("empty.title") }),
   el("p", { text: t("empty.body") }),
@@ -236,7 +235,7 @@ let pendingAuto: { x: number; y: number } | undefined;
 let busy = false;
 
 (document.getElementById("open-btn") as HTMLButtonElement).onclick = () => fileInput.click();
-fileInput.onchange = () => { openFiles([...(fileInput.files ?? [])]); fileInput.value = ""; };
+fileInput.onchange = () => { const f = fileInput.files?.[0]; if (f) openFile(f); fileInput.value = ""; };
 const openBtn = el("button", { class: "btn small ghost", text: t("app.open") });
 openBtn.onclick = () => fileInput.click();
 header.insertBefore(openBtn, capsEl);
@@ -280,20 +279,6 @@ checkBtn.append(checkBadge);
 checkBtn.onclick = () => (!moreEl.hidden && moreId === "check" ? (moreEl.hidden = true) : showPane("check"));
 header.insertBefore(undoBtn, exportTop);
 header.insertBefore(redoBtn, exportTop);
-// A/B for a merged series: the merge or its reference shot alone, under the same edits.
-const seriesBtn = el("button", { class: "btn small ghost series-btn", hidden: "" });
-let seriesInfo: SeriesInfo | undefined;
-function renderSeries() {
-  seriesBtn.hidden = !seriesInfo;
-  if (!seriesInfo) return;
-  const merged = seriesInfo.showing === "merged";
-  seriesBtn.textContent = merged ? t("series.merged", { n: String(seriesInfo.frames) }) : t("series.single");
-  seriesBtn.classList.toggle("on", merged);
-  const k = seriesInfo.noise.single / Math.max(1e-9, seriesInfo.noise.merged);
-  seriesBtn.title = t("series.abTip", { k: k.toFixed(1) });
-}
-seriesBtn.onclick = () => { if (seriesInfo) send({ type: "seriesView", single: seriesInfo.showing === "merged" }); };
-header.insertBefore(seriesBtn, undoBtn);
 header.append(checkBtn, moreBtn);
 undoBtn.disabled = redoBtn.disabled = true;
 stage.append(fsExit);
@@ -308,8 +293,6 @@ let upscaleMode: UpscaleMode = (() => { try { const v = localStorage.getItem("up
 let currentFile: File | undefined;
 /** The open photo's camera white balance (Develop's neutral). */
 let cameraWB: { temp: number; tint: number } | undefined;
-/** …and the series it was merged with (reopens merge it again). */
-let currentSeries: { files: File[]; ref?: number } | undefined;
 /** The page died while processing: don't retry automatically — offer a lighter reopen. */
 /** Scene analysis crashed this device before (the page died during segmentation or depth): it runs on the CPU from now on. */
 const SAFE_ANALYSIS = "safeAnalysis";
@@ -370,9 +353,8 @@ function baseView(): { type: "view"; view: 0 | 1 | 2 | 6 | 9; region?: number } 
 }
 /** A photo is being opened (its analysis has not arrived): late messages about the previous one are ignored. */
 let opening = false;
-function openFile(f: File, restore?: Params, upscaleOverride?: UpscaleMode, series?: { files: File[]; ref?: number }) {
+function openFile(f: File, restore?: Params, upscaleOverride?: UpscaleMode) {
   opening = true;
-  seriesInfo = undefined; renderSeries();
   layersPanel.reset(); // nothing of the previous photo's editing state (tab, picking, a flare waiting) survives
   forgetPendingParams();
   // A mask shown for the previous photo's layer must not colour the new one's first previews.
@@ -380,7 +362,6 @@ function openFile(f: File, restore?: Params, upscaleOverride?: UpscaleMode, seri
   pendingRestore = restore;
   upscale = undefined;
   currentFile = f;
-  currentSeries = series;
   // A new photo starts unzoomed, with the normal preview resolution.
   zoom = 1; panX = 0; panY = 0;
   canvas.style.transform = "";
@@ -390,26 +371,19 @@ function openFile(f: File, restore?: Params, upscaleOverride?: UpscaleMode, seri
   // there must not leave the new photo at the zoomed size.
   if (sentPreviewLong) { sentPreviewLong = 0; send({ type: "preview-zoom", long: basePreviewLong() }); }
   renderUpscale();
-  if (series) forgetPhoto(); else if (!restore) void rememberPhoto(f);
+  if (!restore) void rememberPhoto(f);
   markInflight();
   empty.style.display = "none";
   canvas.style.display = "block";
   logLines.length = 0;
   setProgress(t("progress.opening", { file: f.name }));
   busy = true;
-  send({ type: "open", file: f, resolution, autoExposure, autoDof, upscale: upscaleOverride ?? upscaleMode, safeAnalysis: flag(() => localStorage, SAFE_ANALYSIS), analysis: analysisLevel(), series });
+  send({ type: "open", file: f, resolution, autoExposure, autoDof, upscale: upscaleOverride ?? upscaleMode, safeAnalysis: flag(() => localStorage, SAFE_ANALYSIS), analysis: analysisLevel() });
 }
 
 // Drag & drop on desktop.
 stage.addEventListener("dragover", (e) => e.preventDefault());
-stage.addEventListener("drop", (e) => { e.preventDefault(); openFiles([...(e.dataTransfer?.files ?? [])]); });
-
-/** One photo opens; several are offered as a series to merge (src/burst). */
-function openFiles(files: File[]) {
-  const imgs = files.filter((f) => /^image\//.test(f.type) || /\.(dng|heic|heif|jpe?g|png|tiff?)$/i.test(f.name));
-  if (imgs.length === 1) openFile(imgs[0]);
-  else if (imgs.length > 1) openSeriesSheet(imgs, { merge: (fs, ref) => openFile(fs[0], undefined, undefined, { files: fs, ref }), single: (f) => openFile(f) });
-}
+stage.addEventListener("drop", (e) => { e.preventDefault(); const f = e.dataTransfer?.files?.[0]; if (f) openFile(f); });
 
 function setProgress(text: string | undefined, frac?: number) {
   progress.classList.toggle("on", !!text);
@@ -1175,7 +1149,7 @@ const dofReason = el("p", { class: "muted" });
 // This photo opened without a depth map (analysis failed, or a crash taught this device to skip it).
 const noDepthText = el("p", { class: "muted" });
 const retryDepth = el("button", { class: "btn small", text: t("dof.retryDepth") });
-retryDepth.onclick = () => { resetAnalysisLevel(); if (currentFile) openFile(currentFile, params ? structuredClone(params) : undefined, undefined, currentSeries); };
+retryDepth.onclick = () => { resetAnalysisLevel(); if (currentFile) openFile(currentFile, params ? structuredClone(params) : undefined, undefined); };
 const noDepthBox = el("div", { class: "no-depth", hidden: "" }, el("div", { class: "group-title", text: t("dof.noDepth") }), noDepthText, el("div", { class: "actions" }, retryDepth));
 depthPane.append(noDepthBox);
 depthPane.append(
@@ -1521,7 +1495,7 @@ const upFacts = el("dl", { class: "kv" });
 const upNow = el("button", { class: "btn primary", text: t("upt.runNow") });
 upNow.onclick = () => { if (upscale) { markInflight(); send({ type: "upscale-now" }); } };
 const upRevert = el("button", { class: "btn", text: t("upt.revert") });
-upRevert.onclick = () => { if (currentFile && params) openFile(currentFile, structuredClone(params), "off", currentSeries); };
+upRevert.onclick = () => { if (currentFile && params) openFile(currentFile, structuredClone(params), "off"); };
 const upModeNote = el("p", { class: "muted" });
 upscalePane.append(
   upStatus,
@@ -1538,7 +1512,7 @@ function renderUpscale() {
   upStatus.textContent = u ? upscaleText(u) : currentFile ? t("up.pending") : t("upt.none");
   upModeNote.textContent = t(upscaleMode === "auto" ? "upt.noteAuto" : upscaleMode === "always" ? "upt.noteAlways" : "upt.noteOff");
   const idle = !!u && (u.state === "skipped" || u.state === "failed" || u.state === "cancelled");
-  upNow.hidden = !idle || u!.code === "memory" || !!seriesInfo; // a merged series has no 2× stage
+  upNow.hidden = !idle || u!.code === "memory";
   upRevert.hidden = u?.state !== "applied";
   upFacts.replaceChildren();
   if (!u) return;
@@ -1664,11 +1638,6 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
         logLines.push(`restoring ${r.file.name} after a reload of this tab`);
         openFile(r.file, r.params);
       });
-      break;
-    case "series":
-      seriesInfo = m.info;
-      renderSeries();
-      renderUpscale();
       break;
     case "upscale":
       upscale = m.info;
@@ -1900,7 +1869,6 @@ if (autotestAllowed()) {
   void import("./autotest.ts").then(({ runAutotest }) => {
     const start = () => runAutotest({
       openFile: (f) => openFile(f), params: () => params, pushParams, send,
-      openSeries: (fs) => openFile(fs[0], undefined, undefined, { files: fs }),
       on: (fn) => { engineListeners.add(fn); return () => engineListeners.delete(fn); },
     });
     // After the engine is ready (the first "ready" message).

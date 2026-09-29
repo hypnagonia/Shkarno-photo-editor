@@ -114,23 +114,6 @@ interface Session {
   upscale?: UpscaleInfo;
   /** Tap-to-select: the photo's selector, masks by selection, and the texture the renderer samples. */
   sel?: Selections;
-  /** Opened from a series of shots (src/burst): the merge, and the reference shot alone for A/B. */
-  series?: SeriesState;
-}
-
-interface SeriesState {
-  files: File[];
-  refIndex: number;
-  used: number;
-  factor: number;
-  noise: { single: number; merged: number };
-  /** The merged image (and its denoised version) while the single shot is shown. */
-  merged: { tex: GPUTexture; denoised: GPUTexture };
-  /** The reference shot alone, developed on first request. */
-  single?: { tex: GPUTexture; denoised: GPUTexture };
-  showing: "merged" | "single";
-  /** Phones: the merge's denoised copy was dropped while the single shot shows (made again on return). */
-  mergedDenoise?: boolean;
 }
 
 interface Selections {
@@ -304,8 +287,6 @@ export class Engine {
     const g = this.gpu;
     if (s.denoised !== s.work.tex) g.release(s.denoised);
     g.release(s.work.tex, s.skin);
-    // A series keeps the image not shown (merge or single shot) too.
-    for (const t of [s.series?.merged, s.series?.single]) if (t) g.release(t.tex, t.denoised);
     if (s.sel) { s.sel.sam.dispose(); g.release(s.sel.tex); this.renderer.selection = undefined; }
     this.releaseProxy(s);
     releaseRefined(g, s.maps);
@@ -321,18 +302,18 @@ export class Engine {
    * it is freed here — a stopped 48 MP open otherwise kept ≈ 600 MB (the decoder
    * worker, the working image, masks) and the next attempt started that far behind.
    */
-  async open(file: File, resolution: "auto" | "full" | "half", autoExposure = false, autoDof = false, upscaleMode: UpscaleMode = "auto", safeAnalysis = false, level?: AnalysisLevel, series?: { files: File[]; ref?: number }) {
+  async open(file: File, resolution: "auto" | "full" | "half", autoExposure = false, autoDof = false, upscaleMode: UpscaleMode = "auto", safeAnalysis = false, level?: AnalysisLevel) {
     const cleanup: Array<() => void> = [];
     let committed = false;
     try {
-      await this.openInner(file, resolution, autoExposure, autoDof, upscaleMode, safeAnalysis, level, (f) => cleanup.push(f), () => { committed = true; }, series);
+      await this.openInner(file, resolution, autoExposure, autoDof, upscaleMode, safeAnalysis, level, (f) => cleanup.push(f), () => { committed = true; });
     } finally {
       if (!committed) for (const f of cleanup.reverse()) { try { f(); } catch { /* already freed */ } }
     }
   }
 
   private async openInner(file: File, resolution: "auto" | "full" | "half", autoExposure: boolean, autoDof: boolean, upscaleMode: UpscaleMode, safeAnalysis: boolean, level: AnalysisLevel | undefined,
-    track: (free: () => void) => void, commit: () => void, series?: { files: File[]; ref?: number }) {
+    track: (free: () => void) => void, commit: () => void) {
     const gen = ++this.generation;
     this.closeSession();
     this.gpu.flushStaging(); // the previous photo's readback sizes
@@ -348,26 +329,8 @@ export class Engine {
       while (Math.max(w, h) / f > gpu.info.maxTextureDimension2D) f++;
       return f;
     };
-    let decoded: DecodedImage, work: WorkingImage, seriesInfo: Omit<SeriesState, "merged" | "showing"> | undefined;
-    if (series && series.files.length > 1) {
-      // Several shots of one scene: merged into one working image (src/burst), then opened like a photo.
-      const { mergeSeries } = await import("../burst/burst.ts");
-      let r: Awaited<ReturnType<typeof mergeSeries>>;
-      try {
-        r = await P.time("series merge", () => mergeSeries(gpu, series.files, {
-          factorFor, mode: "clean", ref: series.ref, exposureGain: exposureGainY,
-          progress: (st, d, f) => this.progress(st, d, f), log: (t) => this.log(t), track, cancelled: () => gen !== this.generation,
-        }), (r) => `${r.used} frames ${r.work.width}×${r.work.height}`);
-      } catch (e) {
-        if (gen !== this.generation) { this.log("series merge: stopped (another photo was opened)"); return; }
-        throw e;
-      }
-      decoded = r.decoded; work = r.work; file = r.file;
-      track(() => gpu.release(work.tex));
-      seriesInfo = { files: series.files, refIndex: r.refIndex, used: r.used, factor: r.factor, noise: r.noise };
-      work.log.forEach((l) => this.log(l));
-      upscaleMode = "off"; // the merge is the detail stage
-    } else {
+    let decoded: DecodedImage, work: WorkingImage;
+    {
       this.progress("decode", file.name);
       // The file bytes are only needed by the decoder (which copies them): no
       // reference is kept here, so 30–80 MB can be collected during development.
@@ -537,8 +500,7 @@ export class Engine {
     // Atmospheric light: dark-channel estimate is in the analysis encoding → linear working.
     const A = decision.params.dehaze.light.map((v) => srgbEotf(v) / gain) as [number, number, number];
 
-    const s: Session = { name: seriesInfo ? `${file.name} + ${seriesInfo.used - 1}` : file.name, file, decoded, work, denoised: work.tex, gain, scene, maps, report, decision, params, lightLinear: A, scale: 1, skin: skinTex };
-    if (seriesInfo) s.series = { ...seriesInfo, merged: { tex: work.tex, denoised: work.tex }, showing: "merged" };
+    const s: Session = { name: file.name, file, decoded, work, denoised: work.tex, gain, scene, maps, report, decision, params, lightLinear: A, scale: 1, skin: skinTex };
     if (reference && autoExposure) s.calib = { ref: reference.q, rounds: 0, black: false };
     this.s = s;
     commit(); // from here closeSession() frees it
@@ -643,7 +605,6 @@ export class Engine {
     Object.assign(params, buildAutoLayers(params));
     this.post({ type: "analysis", summary: this.summary(file.name), decisions: decision.decisions, auto: decision.params, params, dof: decision.dofSuggestion, exposureSuggestion: decision.exposureSuggestion, autoCurves: decision.autoCurves, cellCoverage: decision.cellCoverage, cameraWB: { temp: work.camera?.temp ?? 6504, tint: work.camera?.tint ?? 0 }, noDepth: flatDepth ? (scene.log.find((l) => /Depth skipped|Depth unavailable|Scene analysis unavailable/.test(l)) ?? "no depth map") : undefined });
     this.post({ type: "profile", stages: P.stages });
-    this.postSeries();
 
     // --- first preview (before neural restoration) --------------------------------------
     await P.time("preview proxy", () => this.makeProxy());
@@ -688,8 +649,6 @@ export class Engine {
   /** "Upscale 2× now" from the Upscale tab: overrides the decision (never the memory budget). */
   forceUpscale() {
     const s = this.s;
-    // A merged series has no 2× stage (the merge is its detail stage; A/B swaps 1× textures).
-    if (s?.series) return;
     const info = s?.upscale;
     if (!s || !info || s.scale !== 1 || info.state === "running" || info.state === "pending") return;
     const q = decideUpscale(info.report.metrics, {
@@ -831,78 +790,9 @@ export class Engine {
 
   /**
    * A new open is on its way (called outside the queue, when the message arrives):
-   * the open running now stops at its next check instead of finishing first — a
-   * series merge would otherwise hold the queue for every one of its frames.
+   * the open running now stops at its next check instead of finishing first.
    */
   cancelOpen() { this.generation++; }
-
-  private postSeries() {
-    const r = this.s?.series;
-    this.post({ type: "series", info: r ? { frames: r.used, ref: r.files[r.refIndex].name, noise: r.noise, showing: r.showing } : undefined });
-  }
-
-  /**
-   * A/B for a merged series: the reference shot alone (developed the same way, with
-   * the app's usual denoise when the photo calls for it) or the merge, under the
-   * same edits. Swaps the working textures; the analysis is shared.
-   */
-  async seriesView(single: boolean) {
-    const s = this.s, r = s?.series;
-    if (!s || !r || (r.showing === "single") === single) return;
-    // Phones keep two full-size images at a time, not four: the image not shown gives up
-    // its denoised copy (the merge; made again in milliseconds) or goes (the single shot).
-    const phone = isMobile();
-    const remakeMergedDenoise = async () => {
-      if (!r.mergedDenoise) return;
-      r.merged = { tex: r.merged.tex, denoised: await denoiseGPU(this.gpu, r.merged.tex, s.work.width, s.work.height, s.gain, s.report.noise) };
-      r.mergedDenoise = false;
-    };
-    if (r.showing === "merged") r.merged = { tex: s.work.tex, denoised: s.denoised };
-    if (single) {
-      if (phone && r.merged.denoised !== r.merged.tex) {
-        this.releaseProxy(s); // (a same-size proxy aliases the copy)
-        this.gpu.release(r.merged.denoised);
-        r.merged = { tex: r.merged.tex, denoised: r.merged.tex };
-        s.denoised = s.work.tex;
-        r.mergedDenoise = true;
-      }
-      if (!r.single) {
-        try {
-          this.progress("series single");
-          const { developSingle } = await import("../burst/burst.ts");
-          const w = await developSingle(this.gpu, r.files[r.refIndex], r.factor);
-          let dn = w.tex;
-          try {
-            // The same processing as the merge (the decision's denoise), only one frame.
-            if (this.s === s && s.decision.plan.denoise) {
-              const noise = noiseProfile(await measureBlocks(this.gpu, w.tex, w.width, w.height, s.gain, 0.02));
-              dn = await denoiseGPU(this.gpu, w.tex, w.width, w.height, s.gain, noise);
-              this.log(`series A/B: one shot noise ${(noise.mid * 255).toFixed(2)}/255 vs merge ${(s.report.noise.mid * 255).toFixed(2)}/255`);
-            }
-          } catch (e) { this.gpu.release(w.tex, dn); throw e; }
-          if (this.s !== s) { this.gpu.release(w.tex, dn); return; }
-          r.single = { tex: w.tex, denoised: dn };
-        } catch (e) {
-          // Stay on the merge, whole again.
-          await remakeMergedDenoise();
-          s.denoised = r.merged.denoised;
-          await this.makeProxy();
-          throw e;
-        }
-      }
-    } else {
-      if (phone && r.single) { const o = r.single; r.single = undefined; this.releaseProxy(s); if (o.denoised !== o.tex) this.gpu.release(o.denoised); this.gpu.release(o.tex); }
-      await remakeMergedDenoise();
-    }
-    const use = single ? r.single! : r.merged;
-    s.work = { ...s.work, tex: use.tex };
-    s.denoised = use.denoised;
-    r.showing = single ? "single" : "merged";
-    this.dropThumb();
-    await this.makeProxy();
-    this.postSeries();
-    this.requestRender(true);
-  }
 
   private async makeProxy() {
     const s = this.s!;
@@ -1741,13 +1631,7 @@ function exposureGain(rgba: Float32Array): number {
   const n = rgba.length / 4;
   const ys = new Float32Array(n);
   for (let i = 0; i < n; i++) ys[i] = Math.max(0, 0.2627 * rgba[i * 4] + 0.678 * rgba[i * 4 + 1] + 0.0593 * rgba[i * 4 + 2]);
-  return exposureGainY(ys);
-}
-
-/** exposureGain from linear luminances. */
-function exposureGainY(y: Float32Array): number {
-  const ys = y.slice().sort();
-  const n = ys.length;
+  ys.sort();
   const p60 = ys[Math.floor(n * 0.6)] || 1e-4;
   const p99 = ys[Math.floor(n * 0.99)] || 1;
   let k = 0.18 / Math.max(p60, 1e-5);

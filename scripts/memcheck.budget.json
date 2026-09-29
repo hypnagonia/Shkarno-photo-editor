@@ -1,11 +1,7 @@
 {
   "photos": [
     "IMG_1514.DNG",
-    "IMG_8163.HEIC",
-    "burst/b3",
-    "burst/mix",
-    "burst/b5",
-    "burst/b8"
+    "IMG_8163.HEIC"
   ],
   "steps": [
     "open",
@@ -15,11 +11,6 @@
     "ceq",
     "export",
     "reopen"
-  ],
-  "seriesSteps": [
-    "burst",
-    "ab",
-    "export"
   ],
   "timeoutSec": 420,
   "_note": "Peaks measured 2026-09-27 on the iPhone path (?phone) with about 25 % headroom. pageMB: the page process (the app and all its workers); gpuProcMB: the browser's GPU process above its own overhead; engineGpuMB: every texture and buffer the engine allocates (exact, the same in every browser). Raise a budget only with a reason in the commit.",
