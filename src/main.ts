@@ -609,7 +609,8 @@ stage.addEventListener("wheel", (e) => {
 
 // Press and hold: before (camera rendering). Tap in focus mode: add/remove a focus point.
 let holdTimer = 0;
-let holding = false;
+/** Press and hold: "before" (the camera rendering) or, in the tone equalizer, the photo without it. */
+let holding: false | "before" | "toneEq" = false;
 stage.addEventListener("pointerdown", (e) => {
   if (!params || (e.target !== canvas && !pointers.size) || (e.pointerType === "mouse" && e.button !== 0)) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -632,6 +633,14 @@ stage.addEventListener("pointerdown", (e) => {
     const r = imageRect();
     const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
     if (x >= 0 && y >= 0 && x <= 1 && y <= 1) press.tap = { x, y };
+    // Tone equalizer: a tap finds the zone; holding shows the photo without the equalizer.
+    if (toneEqPicking && params?.toneEq) {
+      holdTimer = window.setTimeout(() => {
+        if (!params?.toneEq) return;
+        holding = "toneEq"; badge.textContent = t("teq.without"); badge.classList.add("on");
+        send({ type: "params", params: { ...params, toneEq: { ...params.toneEq, enabled: false } } });
+      }, 180);
+    }
     return;
   }
   if (focusMode) {
@@ -650,7 +659,7 @@ stage.addEventListener("pointerdown", (e) => {
     press.tap = { x, y };
     return;
   }
-  holdTimer = window.setTimeout(() => { holding = true; badge.textContent = t("view.before"); badge.classList.add("on"); send({ ...baseView(), before: true }); }, 180);
+  holdTimer = window.setTimeout(() => { holding = "before"; badge.textContent = t("view.before"); badge.classList.add("on"); send({ ...baseView(), before: true }); }, 180);
 });
 stage.addEventListener("pointermove", (e) => {
   if (!pointers.has(e.pointerId)) return;
@@ -709,7 +718,9 @@ function endDragRing(cancelled = false) {
 function clamp01(v: number) { return Math.min(1, Math.max(0, v)); }
 const endHold = () => {
   clearTimeout(holdTimer);
-  if (holding) { holding = false; badge.classList.remove("on"); send({ ...baseView(), before: false }); }
+  if (holding === "before") send({ ...baseView(), before: false });
+  if (holding === "toneEq" && params) send({ type: "params", params });
+  if (holding) { holding = false; badge.classList.remove("on"); }
 };
 function pointerEnd(e: PointerEvent) {
   if (!pointers.delete(e.pointerId)) return;
@@ -721,10 +732,11 @@ function pointerEnd(e: PointerEvent) {
     return;
   }
   endDragRing(e.type !== "pointerup");
+  const held = !!holding;
   endHold();
   const p = press;
   press = undefined;
-  if (!p || p.moved || e.type === "pointercancel") return;
+  if (!p || p.moved || held || e.type === "pointercancel") return;
   if (p.tap) {
     if (maskPicking) maskTap(p.tap.x, p.tap.y, e.clientX, e.clientY);
     else if (toneEqPicking) void askEngine({ type: "toneEqZone", x: p.tap.x, y: p.tap.y }, (m) => (m.type === "toneEqZone" ? m.zone ?? -1 : undefined), -1).then((z) => { if (z >= 0) toneEqPanel.selectZone(z); });
