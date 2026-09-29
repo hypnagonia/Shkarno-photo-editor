@@ -427,14 +427,24 @@ export class Engine {
     if (decoded.masks?.length) scene.log.push(...applyAppleMattes(scene.seg, decoded.masks));
     // The skin matte also goes to the GPU: the look's skin protection uses it
     // directly instead of guessing skin from the person mask and its colour.
+    // With it (g), the portrait subject matte: exact to the hair, it keeps a person in
+    // focus whole under depth of field (the depth map is too coarse for flyaway hair).
     const skinMatte = decoded.masks?.find((m) => m.kind === "skin");
+    const subjMatte = decoded.masks?.find((m) => m.kind === "subject");
     let skinTex: GPUTexture | undefined;
-    if (skinMatte) {
-      skinTex = gpu.tex("apple.skin", skinMatte.width, skinMatte.height, "r8unorm", GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST);
+    const size = skinMatte ?? subjMatte;
+    if (size) {
+      const w = size.width, h = size.height, rg = new Uint8Array(w * h * 2);
+      const put = (m: typeof size | undefined, c: number) => {
+        if (!m) return;
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) rg[(y * w + x) * 2 + c] = m.data[Math.min(m.height - 1, Math.floor((y * m.height) / h)) * m.width + Math.min(m.width - 1, Math.floor((x * m.width) / w))];
+      };
+      put(skinMatte, 0); put(subjMatte, 1);
+      skinTex = gpu.tex("apple.mattes", w, h, "rg8unorm", GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST);
       const t = skinTex;
       track(() => gpu.release(t));
-      gpu.device.queue.writeTexture({ texture: skinTex }, skinMatte.data as Uint8Array<ArrayBuffer>, { bytesPerRow: skinMatte.width, rowsPerImage: skinMatte.height }, { width: skinMatte.width, height: skinMatte.height });
-      this.log(`Apple skin matte ${skinMatte.width}×${skinMatte.height} drives the look's skin protection`);
+      gpu.device.queue.writeTexture({ texture: skinTex }, rg, { bytesPerRow: w * 2, rowsPerImage: h }, { width: w, height: h });
+      this.log(`Apple mattes ${w}×${h}: ${[skinMatte && "skin (look's skin protection)", subjMatte && "portrait subject (kept sharp under depth of field)"].filter(Boolean).join(", ")}`);
     }
     scene.log.forEach((l) => this.log(l));
     if (gen !== this.generation) return; // (freed by open())
@@ -596,7 +606,7 @@ export class Engine {
     for (const p of [decision.params, params]) {
       // Blur amount from the lens model (auto focus) when the photo calls for it; the
       // default is only a starting point for turning depth of field on by hand.
-      p.dof = { ...p.dof, focus: af.focus, focusSpan: af.span, strength: af.justified ? af.strength : DEFAULT_DOF_STRENGTH, points: [] };
+      p.dof = { ...p.dof, focus: af.focus, focusSpan: af.span, protect: protectGroup(af.kind), strength: af.justified ? af.strength : DEFAULT_DOF_STRENGTH, points: [] };
       if (autoDof && af.justified) p.enable = { ...p.enable, dof: true };
     }
     this.log(`auto focus: distance ${af.focus.toFixed(2)} at (${af.x.toFixed(2)}, ${af.y.toFixed(2)}) — ${af.justified ? "blur justified" : "no blur"}: ${af.reason}${autoDof && af.justified ? " — applied (Auto depth of field)" : ""}`);
@@ -773,6 +783,21 @@ export class Engine {
     s.denoised = await P.time("GPU denoise", () => denoiseGPU(gpu, s.work.tex, W, H, s.gain, s.report.noise), () => `${W}×${H}`);
     this.log(`GPU denoise: full frame, noise-adaptive (σ mid ${(s.report.noise.mid * 255).toFixed(2)}/255)`);
     this.dropThumb(); // look previews must see the restored image
+  }
+
+  /** The object under x, y worth keeping whole in focus (person / animal / vehicle), as a group index. */
+  protectGroupAt(x: number, y: number): number | undefined {
+    const s = this.s;
+    if (!s) return undefined;
+    const seg = s.scene.seg, plane = seg.width * seg.height;
+    const cx = Math.round(x * (seg.width - 1)), cy = Math.round(y * (seg.height - 1));
+    for (const kind of ["person", "animal", "vehicle"] as const) {
+      const g = GROUPS.indexOf(kind);
+      let p = 0;
+      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) p += seg.probs[g * plane + Math.min(seg.height - 1, Math.max(0, cy + j)) * seg.width + Math.min(seg.width - 1, Math.max(0, cx + i))] / 9;
+      if (p > 0.5) return g;
+    }
+    return undefined;
   }
 
   /** The tone-equalizer zone at x, y (0…1): its mask (view 9) at 384 px, read back. */
@@ -1627,6 +1652,11 @@ export class Engine {
 }
 
 /** Gain that puts the 60th-percentile luminance of the analysis image at 0.18 (clamped). */
+/** Kinds of subject kept whole in focus (their segmentation group index). */
+function protectGroup(kind: string | undefined): number | undefined {
+  return kind === "person" || kind === "animal" || kind === "vehicle" ? GROUPS.indexOf(kind) : undefined;
+}
+
 function exposureGain(rgba: Float32Array): number {
   const n = rgba.length / 4;
   const ys = new Float32Array(n);

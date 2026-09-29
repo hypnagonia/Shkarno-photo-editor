@@ -274,7 +274,11 @@ export class Renderer {
     const buf = new ArrayBuffer(base.byteLength + 80 + 144 + 16 + 16 + 256);
     new Uint8Array(buf).set(new Uint8Array(base));
     new Int32Array(buf, base.byteLength, 4).set([0, ty0, src.width, th]);
-    new Float32Array(buf, base.byteLength + 16, 4).set([o.zoneRange?.[0] ?? -1, o.zoneRange?.[1] ?? 2, 0, 0]);
+    // hl: view 5's zone range; zw: the object kept whole in focus (group + 1, 0 none) and its focus distance.
+    const pts = p.dof.points ?? [];
+    const kept = pts.find((q) => q.group !== undefined);
+    const keep = p.enable.dof && p.dof.mode !== "zones" ? (kept ? { g: kept.group!, d: kept.dist } : !pts.length && p.dof.protect !== undefined ? { g: p.dof.protect, d: p.dof.focus } : undefined) : undefined;
+    new Float32Array(buf, base.byteLength + 16, 4).set([o.zoneRange?.[0] ?? -1, o.zoneRange?.[1] ?? 2, keep ? keep.g + 1 : 0, keep?.d ?? 0]);
     const v = p.vignette ?? { amount: 0, midpoint: 0.5, feather: 0.6, roundness: 0.3, highlights: 0.5 };
     const db = p.depthBands ?? [0.33, 0.66];
     new Float32Array(buf, base.byteLength + 32, 8).set([v.amount, v.midpoint, v.feather, v.roundness, v.highlights, db[0], db[1], 0.06]);

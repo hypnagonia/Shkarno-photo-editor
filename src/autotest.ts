@@ -40,6 +40,7 @@ export async function runAutotest(app: AutotestApp) {
     if (m.type === "error") void report("error", { message: m.message });
     // A GPU validation error drops that dispatch silently (the result is just wrong): fail the run.
     if (m.type === "log" && /^GPU error/.test(m.text)) void report("gpuerror", { message: m.text });
+    if (m.type === "log" && /^(Apple mattes|auto focus)/.test(m.text)) void report("log", { text: m.text });
   });
   const waitFor = (pred: (m: FromWorker) => boolean, what: string, ms = 240_000) => new Promise<FromWorker>((resolve, reject) => {
     const timer = setTimeout(() => { off(); reject(new Error(`timeout waiting for ${what}`)); }, ms);
@@ -104,6 +105,16 @@ export async function runAutotest(app: AutotestApp) {
     for (const s of steps) {
       if (s === "open") await open("open");
       else if (s === "snap") await saveExport("snap");
+      else if (s === "dof") {
+        // Depth of field on (automatic focus and strength, or 0.6 when auto found none).
+        const p = app.params(); if (!p) throw new Error("no photo");
+        const done = finalPreview("dof");
+        p.enable = { ...p.enable, dof: true };
+        if (!(p.dof.strength > 0.3)) p.dof = { ...p.dof, strength: 0.6 };
+        app.pushParams(); await done; await settle();
+        await report("dof:info", { focus: p.dof.focus, span: p.dof.focusSpan, strength: p.dof.strength, mode: p.dof.mode });
+        if (q.has("save")) await saveExport("dof");
+      }
       else if (s === "bright") {
         // +2 EV: bright colours into the shoulder (where renderings differ most).
         const p = app.params(); if (!p) throw new Error("no photo");

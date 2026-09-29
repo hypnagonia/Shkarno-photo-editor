@@ -68,7 +68,7 @@ async function handle(m: ToWorker) {
         // points yet, the ring dragged is the automatic one, which becomes a point.
         const f = engine.focusRangeAt(m.x, m.y);
         if (!f) break;
-        const moved = { x: m.x, y: m.y, dist: f.dist, range: f.range };
+        const moved = { x: m.x, y: m.y, dist: f.dist, range: f.range, group: engine.protectGroupAt(m.x, m.y) };
         if (m.index >= 0 && m.index < points.length) points[m.index] = moved;
         else if (!points.length) points.push(moved);
         else break;
@@ -86,9 +86,9 @@ async function handle(m: ToWorker) {
           // distance is the current focus (the user may have moved the slider).
           if (!points.length && s.params.enable.dof && a.x !== undefined && a.y !== undefined && Math.hypot(a.x - m.x, a.y - m.y) >= 0.045) {
             const fz = s.params.dof.focus, sp = s.params.dof.focusSpan ?? [0, 0];
-            points.push({ x: a.x, y: a.y, dist: fz, auto: true, range: [Math.max(0, fz - sp[0]), Math.min(1, fz + sp[1])] });
+            points.push({ x: a.x, y: a.y, dist: fz, auto: true, range: [Math.max(0, fz - sp[0]), Math.min(1, fz + sp[1])], group: s.params.dof.protect });
           }
-          points.push({ x: m.x, y: m.y, dist: f.dist, range: f.range });
+          points.push({ x: m.x, y: m.y, dist: f.dist, range: f.range, group: engine.protectGroupAt(m.x, m.y) });
           if (points.length > MAX_FOCUS_POINTS) points.shift();
         }
       }

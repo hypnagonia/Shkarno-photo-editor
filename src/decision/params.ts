@@ -42,6 +42,8 @@ export interface FocusPoint {
    * it stays sharp — a person turned three-quarters, a long table, a car at an angle.
    */
   range?: [number, number];
+  /** The object under the point (a segmentation group index: person, animal, vehicle), kept whole in focus. */
+  group?: number;
 }
 
 export const MAX_FOCUS_POINTS = 8;
@@ -190,6 +192,8 @@ export interface Params {
     focus: number; strength: number; points: FocusPoint[]; auto: boolean;
     /** Depth extent of the automatic subject around `focus` (below, above): all of it stays sharp. */
     focusSpan?: [number, number];
+    /** The automatic subject's kind (segmentation group index), kept whole in focus. */
+    protect?: number;
     /** "focus": blur from the focus distance / points. "zones": blur set per depth zone by hand. */
     mode?: "focus" | "zones";
     /** Blur 0..1 for each depth zone (near → far). */

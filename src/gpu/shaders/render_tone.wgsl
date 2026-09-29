@@ -40,7 +40,7 @@ struct U {
   flags: vec4<u32>,         // x: enable bits, y: curve rows on (bit 0 photo, 1+i region i, 12 skin, 13…15 near/middle/far), z: lut on, w: debug view
   sem: array<vec4<f32>, 36>,// per group, then skin (index 11): [exp, hl, sat, vib] [hue rad, clarity, texture, sharpen] [denoise, dehaze, warmth, tint]
   tgt: vec4<i32>,           // render target: offset x, y in the full image, target width, height (strip rendering)
-  hl: vec4<f32>,            // view 5: highlighted depth range (lo, hi)
+  hl: vec4<f32>,            // view 5: highlighted depth range (lo, hi); z: object kept whole in focus (group + 1, 0 none), w: its focus distance
   vig: vec4<f32>,           // vignette: amount, midpoint, feather, roundness
   vig2: vec4<f32>,          // vignette highlight protection; distance band edges (near|middle, middle|far) and crossfade
   hdr: vec4<f32>,           // x: write the HDR gain (1) or not (0); y: img rendering on, z: its purity, w: its strength
@@ -821,5 +821,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   textureStore(dst, tp, vec4<f32>(e, sharpen));
   // Distance (0…1) for the blur pass, with Blur layers' amount packed above it:
   // + 2 × amount in thousandths (decoded in render_dof.wgsl's coc_pass).
-  textureStore(dist_out, tp, vec4<f32>(dist + 2.0 * round(clamp(lay_blur, 0.0, 4.0) * 1000.0), 0.0, 0.0, 0.0));
+  // The object in focus stays sharp whole: its pixels take the focus distance, whatever
+  // the (coarse) depth map says at its edges — flyaway hair, fingers, a tail. Apple's
+  // portrait matte for a person (exact to the hair); otherwise its segmentation, only
+  // near its own depth (another person far behind is not pulled into focus).
+  var bd = dist;
+  if (u.hl.z > 0.5) {
+    let gi = min(u32(u.hl.z) - 1u, 10u);
+    var pw = clamp((maps.g[gi] - 0.35) / 0.4, 0.0, 1.0) * (1.0 - smoothstep(0.22, 0.4, abs(dist - u.hl.w)));
+    if (gi == 6u) { pw = max(pw, smoothstep(0.25, 0.75, textureSampleLevel(skin_tex, lsamp, uv, 0.0).g)); }
+    bd = mix(dist, u.hl.w, pw);
+  }
+  textureStore(dist_out, tp, vec4<f32>(bd + 2.0 * round(clamp(lay_blur, 0.0, 4.0) * 1000.0), 0.0, 0.0, 0.0));
 }
