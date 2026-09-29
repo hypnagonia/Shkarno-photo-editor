@@ -57,6 +57,7 @@ import { isPhone, phoneForced } from "../device.ts";
 import { levelsByArea, selectionMask } from "../refine/selection.ts";
 import { selectKey, type MaskShape } from "../layers/model.ts";
 import { liveLayers } from "../layers/gpu.ts";
+import { contrastEqActive } from "../tone/contrastEq.ts";
 import { neutralToneEq, TONE_EQ_DETAIL, type MaskHist, type ToneEqDetail } from "../tone/toneEq.ts";
 import type { CheckItem, CheckInput } from "../analysis/check.ts";
 import type { FixChange } from "../analysis/checkFix.ts";
@@ -1172,7 +1173,9 @@ export class Engine {
     const dof = p.enable.dof && p.dof.strength > 0;
     // Full-resolution exports render in strips: peak extra GPU memory stays at a
     // few tens of MB instead of several full-frame textures.
-    const STRIP = Math.max(64, Math.round(stripRows));
+    // The contrast equalizer needs ≈ 254 rows of margin around each strip at full size: with
+    // it, strips are half as tall, so the margin does not double every strip buffer.
+    const STRIP = Math.max(64, Math.round(contrastEqActive(this.s?.params.contrastEq) ? Math.min(stripRows, 256) : stripRows));
     const strips = async (each: (y0: number, rows: number) => Promise<void>) => {
       for (let y0 = 0; y0 < H; y0 += STRIP) {
         this.progress("export", `rendering ${Math.round((y0 / H) * 100)}%`, y0 / H);

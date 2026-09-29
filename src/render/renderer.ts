@@ -203,18 +203,18 @@ export class Renderer {
 
   /**
    * Contrast equalizer (render_ceq.wgsl) on the tone pass's output, in place: levels
-   * ping-pong between the detail target (free until the detail pass) and one of their
-   * own, the bands gathering in a buffer; the result goes back into `t1`.
+   * ping-pong between the detail target (free until the detail pass) and a texture of
+   * their own, the bands gathering in a buffer; the result goes back into `t1`.
    */
-  private ceqAcc?: { key: string; buf: GPUBuffer };
   private contrastEq(enc: GPUCommandEncoder, temp: Array<GPUBuffer | GPUTexture>, c: ContrastEq, t1: GPUTexture, t2: GPUTexture, W: number, H: number, scale: number) {
     const gpu = this.gpu;
     const lv = levels(scale);
     if (!lv.length) return;
-    const key = `${W}x${H}`;
-    if (this.ceqAcc?.key !== key) { gpu.release(this.ceqAcc?.buf); this.ceqAcc = { key, buf: gpu.buf("render.ceqAcc", W * H * 8, GPUBufferUsage.STORAGE) }; }
-    const acc = this.ceqAcc.buf;
-    const other = this.target("ceq", W, H, "rgba16float");
+    // Only for this render (freed once it is submitted): cached, a preview's pair stayed
+    // allocated through a full-size export and pushed the phone past its GPU budget.
+    const acc = gpu.buf("render.ceqAcc", W * H * 8, GPUBufferUsage.STORAGE);
+    const other = gpu.tex("render.ceq", W, H, "rgba16float", GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING);
+    temp.push(acc, other);
     this.ceqSampler ??= gpu.device.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" });
     const sigma = edgeSigma(c.edges);
     let from = t1, to = t2;
@@ -257,8 +257,6 @@ export class Renderer {
   }
   /** Frees all cached render targets (after an export, or when a photo closes). */
   releaseTargets() {
-    this.gpu.release(this.ceqAcc?.buf);
-    this.ceqAcc = undefined;
     for (const t of this.targets.values()) this.gpu.release(t);
     this.targets.clear();
     this.dofMips?.tex.destroy();
