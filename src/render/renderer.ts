@@ -13,6 +13,8 @@ import { Gpu, Uniforms } from "../gpu/gpu.ts";
 import toneWgsl from "../gpu/shaders/render_tone.wgsl?raw";
 import layersWgsl from "../gpu/shaders/layers.wgsl?raw";
 import { TONE_EQ_DETAIL, toneEqActive, toneEqLut } from "../tone/toneEq.ts";
+import { contrastEqActive, edgeSigma, levels, stripApron, type ContrastEq } from "../tone/contrastEq.ts";
+import ceqWgsl from "../gpu/shaders/render_ceq.wgsl?raw";
 import { ATLAS_W, hasBlurLayers, packLayers, RECORD } from "../layers/gpu.ts";
 import type { MaskShape } from "../layers/model.ts";
 import detailWgsl from "../gpu/shaders/render_detail.wgsl?raw";
@@ -44,7 +46,7 @@ export interface RenderOptions {
   gain: number; // analysis/guide encoding gain k
   lightLinear: [number, number, number];
   output: "srgb8" | "p38" | "p3f16";
-  debugView?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+  debugView?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
   /** Depth range highlighted by debug view 5. */
   zoneRange?: [number, number];
   /** Region index highlighted by debug view 4. */
@@ -199,6 +201,36 @@ export class Renderer {
     return u.bytes();
   }
 
+  /**
+   * Contrast equalizer (render_ceq.wgsl) on the tone pass's output, in place: levels
+   * ping-pong between the detail target (free until the detail pass) and one of their
+   * own, the bands gathering in a buffer; the result goes back into `t1`.
+   */
+  private ceqAcc?: { key: string; buf: GPUBuffer };
+  private contrastEq(enc: GPUCommandEncoder, temp: Array<GPUBuffer | GPUTexture>, c: ContrastEq, t1: GPUTexture, t2: GPUTexture, W: number, H: number, scale: number) {
+    const gpu = this.gpu;
+    const lv = levels(scale);
+    if (!lv.length) return;
+    const key = `${W}x${H}`;
+    if (this.ceqAcc?.key !== key) { gpu.release(this.ceqAcc?.buf); this.ceqAcc = { key, buf: gpu.buf("render.ceqAcc", W * H * 8, GPUBufferUsage.STORAGE) }; }
+    const acc = this.ceqAcc.buf;
+    const other = this.target("ceq", W, H, "rgba16float");
+    this.ceqSampler ??= gpu.device.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" });
+    const sigma = edgeSigma(c.edges);
+    let from = t1, to = t2;
+    lv.forEach((l, i) => {
+      const u = gpu.uniform(new Uniforms(8).u32(W, H, i === 0 ? 1 : 0, 0).f32(l.step, c.luma[l.band] ?? 0, c.chroma[l.band] ?? 0, sigma).bytes(), "ceq.u");
+      temp.push(u);
+      gpu.dispatch(enc, gpu.pipeline("render.ceq", ceqWgsl, "level"), [u, from.createView(), this.ceqSampler, to.createView(), acc], Math.ceil(W / 8), Math.ceil(H / 8));
+      from = to;
+      to = to === t2 ? other : t2;
+    });
+    const u = gpu.uniform(new Uniforms(8).u32(W, H, 0, 0).f32(0, 0, 0, 0).bytes(), "ceq.u");
+    temp.push(u);
+    gpu.dispatch(enc, gpu.pipeline("render.ceq", ceqWgsl, "finalize"), [u, undefined, undefined, t1.createView(), acc], Math.ceil(W / 8), Math.ceil(H / 8));
+  }
+  private ceqSampler?: GPUSampler;
+
   // ------------------------------------------------------------------ targets
   /** Render targets are reused across renders (no per-frame allocation churn). */
   private targets = new Map<string, GPUTexture>();
@@ -225,6 +257,8 @@ export class Renderer {
   }
   /** Frees all cached render targets (after an export, or when a photo closes). */
   releaseTargets() {
+    this.gpu.release(this.ceqAcc?.buf);
+    this.ceqAcc = undefined;
     for (const t of this.targets.values()) this.gpu.release(t);
     this.targets.clear();
     this.dofMips?.tex.destroy();
@@ -255,7 +289,7 @@ export class Renderer {
     new Uint32Array(buf, base.byteLength + 224, 4).set([this.layerCount, this.atlasRows, dbits, p.protectHighlights === false ? 0 : 1]);
     // Off unless it changes something — or its mask is being shown (view 9).
     const eq = p.toneEq;
-    const eqOn = !!eq && eq.enabled && (toneEqActive(eq) || o.debugView === 9 || o.debugView === 10);
+    const eqOn = !!eq && eq.enabled && (toneEqActive(eq) || o.debugView === 9 || o.debugView === 10 || o.debugView === 11);
     new Float32Array(buf, base.byteLength + 240, 4).set([eqOn ? TONE_EQ_DETAIL.indexOf(eq!.detail) : -1, eq?.maskExposure ?? 0, eq?.maskContrast ?? 1, 0]);
     if (eqOn) new Float32Array(buf, base.byteLength + 256, 64).set(toneEqLut(eq!));
     const u = gpu.uniform(buf, "tone.u");
@@ -289,11 +323,12 @@ export class Renderer {
     const { size: lutSize, identity } = this.ensureLuts(p, hdrStops);
     // The blur pass: depth of field, and/or Blur layers (a radius of 3 % of the long side at amount 1).
     const depthDof = dofOn && p.dof.strength > 0;
-    const blurR = (o.debugView ?? 0) < 7 && hasBlurLayers(p.layers ?? [], p.autoCurves ?? 1, p.enable) ? 0.03 * Math.max(W, H) : 0;
+    const blurR = ((o.debugView ?? 0) < 7 || o.debugView === 11) && hasBlurLayers(p.layers ?? [], p.autoCurves ?? 1, p.enable) ? 0.03 * Math.max(W, H) : 0;
     const dof = depthDof || blurR > 0;
     const maxRadius = depthDof ? p.dof.strength * 0.022 * Math.max(W, H) : 0;
     const y0 = strip?.y0 ?? 0, rows = strip?.rows ?? H;
-    const apron = strip ? (dof ? Math.ceil(Math.max(maxRadius, blurR)) + 4 : 3) : 0;
+    const ceqOn = contrastEqActive(p.contrastEq) && (o.debugView ?? 0) < 7;
+    const apron = strip ? Math.max(dof ? Math.ceil(Math.max(maxRadius, blurR)) + 4 : 3, ceqOn ? stripApron(W / src.fullWidth) : 0) : 0;
     // Strip starts are aligned to 64 rows so the depth-of-field mip grid (up to
     // 2^5-row texels) lines up with the full-image grid: no seams between strips.
     // Heights are rounded up to 64 rows too (mip level sizes round down, so an
@@ -310,6 +345,7 @@ export class Renderer {
     const scale = W / src.fullWidth;
     await gpu.run("render.tone+detail", (enc, temp) => {
       this.toneDispatch(enc, temp, src, maps, p, o, lutSize, !identity, p.enable.lut && !isNeutral(p.profile), t1, distT, ty0, th, gainT);
+      if (ceqOn) this.contrastEq(enc, temp, p.contrastEq!, t1, t2, W, th, scale);
       // Sharpening radius is defined at full resolution; a preview sees it scaled.
       const radius = p.sharpen.radius * Math.max(scale, 0.35);
       const amount = p.enable.sharpen ? p.sharpen.amount * Math.min(1, scale * 1.5 + 0.2) : 0;

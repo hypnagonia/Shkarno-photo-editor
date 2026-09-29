@@ -6,6 +6,7 @@ import "./styles.css";
 import type { Capabilities, ExportFormat, FromWorker, SeriesInfo, StageProfile, Summary, ToWorker, UpscaleInfo, UpscaleMode } from "./engine/protocol.ts";
 import { openSeriesSheet } from "./ui/seriesSheet.ts";
 import { createToneEqPanel } from "./ui/toneEqPanel.ts";
+import { createContrastEqPanel } from "./ui/contrastEqPanel.ts";
 import { DEPTH_BANDS, defaultParams, type Decision, type DepthBand, type Params } from "./decision/params.ts";
 import { createLookPanel } from "./ui/lookPanel.ts";
 import { createRegionsPanel } from "./ui/regionsPanel.ts";
@@ -659,6 +660,12 @@ stage.addEventListener("pointerdown", (e) => {
     press.tap = { x, y };
     return;
   }
+  const off = holdOff;
+  if (off && params) {
+    // An equalizer's tab: holding shows the photo without that equalizer.
+    holdTimer = window.setTimeout(() => { if (!params) return; holding = "toneEq"; badge.textContent = t("ceq.without"); badge.classList.add("on"); send({ type: "params", params: off(params) }); }, 180);
+    return;
+  }
   holdTimer = window.setTimeout(() => { holding = "before"; badge.textContent = t("view.before"); badge.classList.add("on"); send({ ...baseView(), before: true }); }, 180);
 });
 stage.addEventListener("pointermove", (e) => {
@@ -739,7 +746,7 @@ function pointerEnd(e: PointerEvent) {
   if (!p || p.moved || held || e.type === "pointercancel") return;
   if (p.tap) {
     if (maskPicking) maskTap(p.tap.x, p.tap.y, e.clientX, e.clientY);
-    else if (toneEqPicking) void askEngine({ type: "toneEqZone", x: p.tap.x, y: p.tap.y }, (m) => (m.type === "toneEqZone" ? m.zone ?? -1 : undefined), -1).then((z) => { if (z >= 0) toneEqPanel.selectZone(z); });
+    else if (toneEqPicking) void askEngine({ type: "toneEqZone", x: p.tap.x, y: p.tap.y }, (m) => (m.type === "toneEqZone" ? m.zone ?? -1 : undefined), -1).then((z) => { if (z >= 0) showToneEqZone(z); });
     else send({ type: "focus", action: "toggle", x: p.tap.x, y: p.tap.y });
     return;
   }
@@ -1039,7 +1046,34 @@ const llmPanel = createLlmPanel(llmPane, {
   canvas,
 });
 
+/**
+ * A tap on the photo in the tone equalizer: its zone is selected in the panel, named on
+ * the photo, and lit up there for a moment (the rest dimmed, view 11).
+ */
+let zoneFlash = 0;
+function showToneEqZone(z: number) {
+  toneEqPanel.selectZone(z);
+  const g = params?.toneEq?.gains[z] ?? 0;
+  badge.textContent = t("teq.tapped", { ev: String(z - 8), gain: `${g > 0 ? "+" : ""}${g.toFixed(2)}` });
+  badge.classList.add("on");
+  send({ type: "view", view: 11, region: z });
+  clearTimeout(zoneFlash);
+  zoneFlash = window.setTimeout(() => { badge.classList.remove("on"); send(baseView()); }, 1400);
+}
+
 // Tone equalizer (src/ui/toneEqPanel.ts): a card of its own in the dock.
+/** The equalizer whose tab is open: holding the photo shows it without that one. */
+let holdOff: ((p: Params) => Params) | undefined;
+const contrastEqPanel = createContrastEqPanel({
+  params: () => params,
+  changed: (label) => { nextLabel = label; lookPanel.invalidate(); pushParams(); },
+});
+const contrastEqTab = {
+  el: contrastEqPanel.el,
+  render: () => { contrastEqPanel.render(); holdOff = ceqOff; },
+  leave: () => { if (holdOff === ceqOff) holdOff = undefined; },
+};
+function ceqOff(p: Params): Params { return p.contrastEq ? { ...p, contrastEq: { ...p.contrastEq, enabled: false } } : p; }
 const toneEqPanel = createToneEqPanel({
   params: () => params,
   changed: (label) => { nextLabel = label; lookPanel.invalidate(); pushParams(); },
@@ -1063,6 +1097,7 @@ const layersPanel = createLayersPanel(dockEl, propsEl, {
   develop: developEl,
   blur: blurEl,
   toneEq: toneEqPanel,
+  contrastEq: contrastEqTab,
   photoColors: () => askEngine({ type: "palette" }, (m) => (m.type === "palette" ? m.stats.palette.map((w) => w.hex) : undefined), [] as string[]),
   notice: (text) => { badge.textContent = text; badge.classList.add("on"); },
   brightest: () => askEngine({ type: "brightest" }, (m) => (m.type === "brightest" ? { x: m.x, y: m.y } : undefined), { x: 0.3, y: 0.2 }),

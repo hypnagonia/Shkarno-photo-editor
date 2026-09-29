@@ -132,7 +132,23 @@ export async function runAutotest(app: AutotestApp) {
     for (const s of steps) {
       if (s === "open") await open("open");
       else if (s === "burst") await burst();
-      else if (s === "snap") await saveExport("snap"); // (the photo as it is now, for comparisons)
+      else if (s === "snap") await saveExport("snap");
+      else if (s === "ceq") {
+        // Contrast equalizer: a preset (?ceq=id, default clarity), then an export (strips: seams would show).
+        const p = app.params();
+        if (!p) throw new Error("no photo");
+        const { CONTRAST_EQ_PRESETS, neutralContrastEq } = await import("./tone/contrastEq.ts");
+        const pr = CONTRAST_EQ_PRESETS.find((x) => x.id === q.get("ceq")) ?? CONTRAST_EQ_PRESETS[0];
+        await mem();
+        await report("ceq:start");
+        const done = finalPreview("ceq");
+        p.contrastEq = { ...neutralContrastEq(), luma: [...pr.luma], chroma: [...pr.chroma] };
+        app.pushParams();
+        await done;
+        await settle();
+        if (q.has("save")) await saveExport("ceq");
+        await report("ceq:done", { ...(await mem()), js: await jsMem() });
+      } // (the photo as it is now, for comparisons)
       else if (s === "toneeq") {
         // Tone equalizer: the "compress" preset on a fitted mask, then its mask view (a read-back of zones).
         const p = app.params();

@@ -41,8 +41,9 @@ type Ctx = {
   blur: HTMLElement;
   /** Something other than Blur became selected: its photo tools (focus picking, zone views) end. */
   leftBlur?: () => void;
-  /** The tone equalizer's panel: its element, shown / left. */
+  /** Panels of their own in the dock (tone / contrast equalizers): element, shown, left. */
   toneEq?: { el: HTMLElement; render: () => void; leave: () => void };
+  contrastEq?: { el: HTMLElement; render: () => void; leave: () => void };
   /** Taps on the photo pick what to mask (on, with a hint for the photo) or do what they normally do (off). */
   pickMode: (on: boolean, hint?: string) => void;
   /** A short message on the photo. */
@@ -55,7 +56,7 @@ type Ctx = {
 
 /** Layer types in the ＋ sheet (each type's icon has the type's name). */
 /** The cards that are not layers: always there, at the bottom of the stack. */
-type Fixed = "develop" | "toneEq" | "blur";
+type Fixed = "develop" | "toneEq" | "contrastEq" | "blur";
 
 const ADD: LayerType[] = ["curves", "hueSat", "basic", "blur", "gradientMap", "gradientFill", "brightContrast", "exposure"];
 
@@ -151,7 +152,7 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
   }
 
   function renderDock() {
-    list.replaceChildren(...[...layers()].reverse().map((l) => card(l)), card(undefined, "develop"), ...(ctx.toneEq ? [card(undefined, "toneEq")] : []), card(undefined, "blur"));
+    list.replaceChildren(...[...layers()].reverse().map((l) => card(l)), card(undefined, "develop"), ...(ctx.toneEq ? [card(undefined, "toneEq")] : []), ...(ctx.contrastEq ? [card(undefined, "contrastEq")] : []), card(undefined, "blur"));
     list.querySelector(".lay-card.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
@@ -700,15 +701,19 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     curvesUi = undefined;
     const l = sel();
     if (!l) {
-      if (selected !== "blur" && selected !== "toneEq") selected = "develop";
+      if (selected !== "blur" && selected !== "toneEq" && selected !== "contrastEq") selected = "develop";
       if (selected !== "blur") ctx.leftBlur?.();
-      if (selected === "toneEq" && ctx.toneEq) { props.replaceChildren(ctx.toneEq.el); ctx.toneEq.render(); }
-      else { ctx.toneEq?.leave(); props.replaceChildren(selected === "blur" ? ctx.blur : ctx.develop); }
+      if (selected !== "toneEq") ctx.toneEq?.leave();
+      if (selected !== "contrastEq") ctx.contrastEq?.leave();
+      const own = selected === "toneEq" ? ctx.toneEq : selected === "contrastEq" ? ctx.contrastEq : undefined;
+      if (own) { props.replaceChildren(own.el); own.render(); }
+      else props.replaceChildren(selected === "blur" ? ctx.blur : ctx.develop);
       applyMaskView();
       return;
     }
     ctx.leftBlur?.();
     ctx.toneEq?.leave();
+    ctx.contrastEq?.leave();
     const name = el("input", { class: "lay-title", value: layerName(l), "aria-label": t("lay.name") });
     name.onchange = () => { l.name = name.value.trim() || layerName(l); (l as Layer & { renamed?: boolean }).renamed = true; edit(); renderDock(); };
     const act = (ic: Parameters<typeof icon>[0], label: string, fn: () => void) => { const b = el("button", { class: "btn small icon ghost", title: label, "aria-label": label }, icon(ic, 19)); b.onclick = fn; return b; };

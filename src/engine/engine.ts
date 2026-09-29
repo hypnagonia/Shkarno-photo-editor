@@ -168,7 +168,7 @@ export class Engine {
   /** An explicit depth range to highlight in view 5 (a distance band). */
   private viewRange?: [number, number];
   private previewLong = isMobile() ? 1600 : 2048;
-  private view: 0 | 1 | 2 | 4 | 5 | 6 | 9 = 0;
+  private view: 0 | 1 | 2 | 4 | 5 | 6 | 9 | 11 = 0;
   private region = 0;
   private before = false;
   private generation = 0;
@@ -1041,7 +1041,7 @@ export class Engine {
     this.requestRender(!draft, draft);
   }
 
-  setView(view: 0 | 1 | 2 | 4 | 5 | 6 | 9, before = false, region = 0, range?: [number, number]) {
+  setView(view: 0 | 1 | 2 | 4 | 5 | 6 | 9 | 11, before = false, region = 0, range?: [number, number]) {
     this.view = view;
     this.region = region;
     this.viewRange = range;

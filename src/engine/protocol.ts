@@ -67,7 +67,7 @@ export type ToWorker =
   | { type: "toneEqHist" }
   | { type: "upscale-now" }
   | { type: "params"; params: Params; draft?: boolean }
-  | { type: "view"; view: 0 | 1 | 2 | 4 | 5 | 6 | 9; before?: boolean; region?: number; range?: [number, number] }
+  | { type: "view"; view: 0 | 1 | 2 | 4 | 5 | 6 | 9 | 11; before?: boolean; region?: number; range?: [number, number] }
   | { type: "focus"; action: "toggle"; x: number; y: number }
   | { type: "focus"; action: "move"; index: number; x: number; y: number }
   | { type: "focus"; action: "clear" }

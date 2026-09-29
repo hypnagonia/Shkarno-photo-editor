@@ -5,6 +5,7 @@
  * edited in the UI and serialised with an export.
  */
 import type { ToneEq } from "../tone/toneEq.ts";
+import type { ContrastEq } from "../tone/contrastEq.ts";
 import { GROUPS, type Group } from "../neural/scene.ts";
 import type { LookProfile } from "../looks/profile.ts";
 import type { Layer } from "../layers/model.ts";
@@ -164,6 +165,8 @@ export interface Params {
   grain: { amount: number; size: number; roughness: number; color: number };
   /** Tone equalizer (src/tone/toneEq.ts): exposure by brightness zone of a smoothed mask. Absent = off. */
   toneEq?: ToneEq;
+  /** Contrast equalizer (src/tone/contrastEq.ts): local contrast by size of detail. Absent = off. */
+  contrastEq?: ContrastEq;
   /**
    * Depth of field. With no `points`, `focus` (automatic) is the single focal
    * distance. With points, a pixel stays sharp if it is near the distance of

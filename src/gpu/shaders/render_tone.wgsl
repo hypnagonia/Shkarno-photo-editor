@@ -547,6 +547,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   var Lp = L;
   // The smoothed base after local tone mapping (coarse, medium): the tone equalizer's mask.
   var mapC = L; var mapM = L; var mapped = false;
+  var teqZone = -1.0; // this pixel's tone-equalizer zone (view 11 highlights one)
   if ((flags & EN_LOCAL) != 0u) {
     let cc = bil(tc, gp);
     let mm = bil(tm, gp);
@@ -587,6 +588,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // View 10: the raw mask (before compensation), −16 … +4 EV as 0 … 1 (read back for the panel's histogram).
     if (u.flags.w == 10u) { textureStore(dst, tp, vec4<f32>(vec3<f32>(clamp((mev + 16.0) / 20.0, 0.0, 1.0)), 0.0)); return; }
     let cm = (mev + u.teq.y + 4.0) * u.teq.z - 4.0;
+    teqZone = clamp(round(cm) + 8.0, 0.0, 8.0);
     // View 9: the mask as the nine zones, grey steps (black = −8 EV and below, white = 0 and above).
     if (u.flags.w == 9u) { textureStore(dst, tp, vec4<f32>(vec3<f32>(clamp(round(cm) + 8.0, 0.0, 8.0) / 8.0), 0.0)); return; }
     let x = clamp((cm + 10.0) / 12.0, 0.0, 1.0) * 63.0;
@@ -731,6 +733,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Depth zone at full brightness, the rest dimmed (soft edges, same refined depth the blur uses).
     let inz = smoothstep(u.hl.x - 0.015, u.hl.x + 0.015, dist) * (1.0 - smoothstep(u.hl.y - 0.015, u.hl.y + 0.015, dist));
     e = mix(e * 0.2, e, inz);
+  } else if (u.flags.w == 11u) {
+    // One tone-equalizer zone (u.color.z) at full brightness, the rest dimmed (a tap on the photo).
+    e = mix(e * 0.22, e, select(0.0, 1.0, abs(teqZone - u.color.z) < 0.5));
   } else if (u.flags.w == 4u) {
     // Selected region at full brightness, everything else dimmed (soft, by probability).
     let sel = u32(u.color.z);

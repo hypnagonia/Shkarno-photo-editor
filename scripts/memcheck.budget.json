@@ -12,6 +12,7 @@
     "select",
     "blur",
     "toneeq",
+    "ceq",
     "export",
     "reopen"
   ],
