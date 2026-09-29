@@ -324,6 +324,10 @@ fn apply_profile(e_tech: vec3<f32>, g: array<f32, 12>, dist: f32, apple_skin: f3
   //    regions; skin keeps ~35% of the palette — graded, never disconnected from it
   let k = clamp(prof.f.y, 0.0, 1.0) * (1.0 - protect) * (1.0 - 0.65 * skin);
   var res = mix(lab_t, vec3<f32>(L, ab), k);
+  // 12b. cold kept cold (see cold_weights): the look neither warms nor greys it
+  let wc = cold_weights(lab_t, gw, dist, skin);
+  let wcm = max(wc.x, wc.y);
+  if (wcm > 1e-3) { res = vec3<f32>(res.x, res.y, mix(res.z, min(res.z, lab_t.z), wcm)); }
   // 13. skin guard: hue within ±7° of the technical skin hue (no green, magenta or teal
   //     skin), chroma at most +12%, lightness within −0.05 … +0.04 (keeps the rolloff)
   if (skin > 1e-3 && Ct > 0.01) {
@@ -519,6 +523,20 @@ fn img_render(c: vec3<f32>, Y: f32, quiet: f32) -> vec3<f32> {
     }
   }
   return clamp(P3_FROM_SRGB * oklab_to_lin_srgb(lab), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+/**
+ * Where the photo is cold on purpose (OkLab in): x = a cool white on a person or an
+ * animal (bright, nearly neutral, on the blue side; not skin), y = a blue shadow in the
+ * farthest foliage only (aerial perspective). 0 with the semantic stage off.
+ */
+fn cold_weights(lab: vec3<f32>, g: array<f32, 12>, dist: f32, skin: f32) -> vec2<f32> {
+  if ((u.flags.x & EN_SEMANTIC) == 0u) { return vec2<f32>(0.0); }
+  let cool = smoothstep(0.004, 0.02, -lab.z);
+  let C = length(lab.yz);
+  let white = clamp(g[6] + g[8], 0.0, 1.0) * (1.0 - skin) * smoothstep(0.6, 0.78, lab.x) * (1.0 - smoothstep(0.06, 0.1, C));
+  let shade = clamp(g[1], 0.0, 1.0) * (1.0 - skin) * smoothstep(0.82, 0.97, dist) * (1.0 - smoothstep(0.35, 0.6, lab.x));
+  return vec2<f32>(white, shade) * cool;
 }
 
 fn soft_detail(d: f32, gain: f32, k: f32) -> f32 {
@@ -730,12 +748,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   var lin = P3_TO_SRGB * srgb_eotf(e);
   var lab = lin_srgb_to_oklab(lin);
   let C = length(lab.yz);
+  // Cold where it is cold: a cool white on a person or an animal (a white shirt in shade,
+  // white fur under an open sky) and blue shadows in the farthest foliage (aerial perspective)
+  // are emphasised — not warmed, turned toward yellow or cleaned toward neutral.
+  let w_cool = cold_weights(lab, maps.g, dist, skin_w);
+  let w_cold = max(w_cool.x, w_cool.y);
   if (C > 1e-5) {
     let sat = 1.0 + u.color.x + sem.sat;
     let vib = u.color.y * (1.0 + sem.vib);
     let vgain = 1.0 + vib * (1.0 - smoothstep(0.0, 0.2, C));
     var ab = lab.yz * max(sat * vgain, 0.0);
-    let hr = sem.hue;
+    let hr = sem.hue * (1.0 - w_cold);
     if (abs(hr) > 1e-4) {
       let cs = cos(hr); let sn = sin(hr);
       ab = vec2<f32>(ab.x * cs - ab.y * sn, ab.x * sn + ab.y * cs);
@@ -746,13 +769,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // Per-region temperature / tint (OkLab b / a offsets, fading toward black and white).
   if (abs(sem.warmth) + abs(sem.tint) > 1e-4) {
     let edge = smoothstep(0.02, 0.15, lab.x) * (1.0 - smoothstep(0.93, 1.0, lab.x));
-    lab = vec3<f32>(lab.x, lab.y + edge * 0.03 * sem.tint, lab.z + edge * 0.035 * sem.warmth);
+    let warmth = select(sem.warmth, sem.warmth * (1.0 - w_cold), sem.warmth > 0.0);
+    let tint = select(sem.tint, sem.tint * (1.0 - w_cold), sem.tint > 0.0);
+    lab = vec3<f32>(lab.x, lab.y + edge * 0.03 * tint, lab.z + edge * 0.035 * warmth);
   }
+  // (Proportional: a barely cool white gets barely more, a neutral one nothing.)
+  if (w_cold > 1e-3) { lab = vec3<f32>(lab.x, lab.y, lab.z * (1.0 + 0.35 * w_cold)); }
   // Clean whites: very bright, nearly neutral surfaces (white clothing, a wedding
   // dress, paper, clouds) lose the colour casts reflected onto them by foliage, sky
   // or nearby objects. Clearly coloured tones (skin, a pastel wall) are untouched.
   {
-    let kw = smoothstep(0.78, 0.92, lab.x) * (1.0 - smoothstep(0.03, 0.06, length(lab.yz))) * 0.5;
+    let kw = smoothstep(0.78, 0.92, lab.x) * (1.0 - smoothstep(0.03, 0.06, length(lab.yz))) * 0.5 * (1.0 - w_cool.x);
     if (kw > 1e-3) { lab = vec3<f32>(lab.x, lab.yz * (1.0 - kw)); }
   }
   lin = oklab_to_lin_srgb(lab);
