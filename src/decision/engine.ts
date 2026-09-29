@@ -231,6 +231,9 @@ export function decide(ctx: EngineContext): DecisionResult {
   const spread = R.global.sdEV;
   p.tone.contrast = r2(clamp((1.6 - spread) * 0.12, -0.1, 0.18));
   p.tone.rolloff = r2(clamp(0.45 + 0.4 * smooth(0.5, 2.5, hiEV), 0.4, 0.9));
+  // An already-rendered source keeps its camera's tone: its curve is the identity and
+  // these settings are changes to it — only a little contrast for flat scenes, no new shoulder.
+  if (ctx.referred === "display") { p.tone.displayReferred = true; p.tone.contrast = r2(p.tone.contrast * 0.5); p.tone.rolloff = 0.5; }
   note("tone.contrast", p.tone.contrast, `log-luminance spread ${spread.toFixed(2)} EV (flat < 1.6 EV)`, { sdEV: r2(spread) });
 
   // HDR headroom: how far the brightest meaningful highlights sit above the level

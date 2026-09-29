@@ -27,7 +27,48 @@ export const CURVE_LUT_SIZE = 1024;
  */
 export const MID_OUT = 0.29;
 
-export function toneCurve(tone: Params["tone"]) {
+/** The tone settings that change nothing (the rendering intent itself). */
+export const NEUTRAL_TONE: Params["tone"] = { highlights: 0, shadows: 0, whites: 0, blacks: 0, contrast: 0, rolloff: 0.5 };
+
+/**
+ * The tone curve: scene luminance → display luminance.
+ *
+ * A display-referred source (JPEG / HEIC, `tone.displayReferred`) is already a finished
+ * rendering: rendering it again (mid grey 0.18 → 0.29, a new toe and shoulder) made an
+ * untouched iPhone photo 20 % brighter and flatter. For it the curve is the identity,
+ * and the settings apply as the change they make to the neutral scene curve: the value
+ * is read back to the scene level the neutral curve would show it at, and rendered with
+ * the settings — so neutral settings return it unchanged. Above white (exposure raised
+ * it) a soft shoulder rolls it into 1 instead of clipping.
+ */
+export function toneCurve(tone: Params["tone"]): (Y: number) => number {
+  if (!tone.displayReferred) return sceneCurve(tone);
+  const edited = sceneCurve(tone), neutral = sceneCurve(NEUTRAL_TONE);
+  const inv = inverseOf(neutral);
+  const K = 0.92;
+  return (Y: number) => {
+    const y = Y <= K ? Math.max(Y, 0) : 1 - (1 - K) * Math.exp(-(Y - K) / (1 - K));
+    return Math.min(1, edited(inv(y)));
+  };
+}
+
+/** The inverse of a monotone curve on 0 … 1 (bisection in log2 of its input, cached on a grid). */
+function inverseOf(f: (Y: number) => number): (y: number) => number {
+  const N = 1024, lo = -20, hi = 8, tab = new Float64Array(N + 1);
+  for (let i = 0; i <= N; i++) {
+    const target = i / N;
+    let a = lo, b = hi;
+    for (let k = 0; k < 50; k++) { const m = (a + b) / 2; if (f(2 ** m) < target) a = m; else b = m; }
+    tab[i] = 2 ** ((a + b) / 2);
+  }
+  return (y: number) => {
+    const x = Math.min(1, Math.max(0, y)) * N, i = Math.min(N - 1, Math.floor(x)), t = x - i;
+    // Interpolated in log (the inverse is steep near black).
+    return Math.exp(Math.log(Math.max(tab[i], 1e-12)) * (1 - t) + Math.log(Math.max(tab[i + 1], 1e-12)) * t);
+  };
+}
+
+function sceneCurve(tone: Params["tone"]) {
   const c = 1.02 + 0.35 * tone.contrast;
   // Peak slightly above 1: rolloff = 1 → asymptotic shoulder (softest), 0 → reaches white early.
   const Yw = 1.0 + 0.3 * (1 - tone.rolloff) * (1 + 0.5 * tone.whites);

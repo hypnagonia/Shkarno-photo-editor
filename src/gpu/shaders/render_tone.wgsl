@@ -43,7 +43,7 @@ struct U {
   hl: vec4<f32>,            // view 5: highlighted depth range (lo, hi)
   vig: vec4<f32>,           // vignette: amount, midpoint, feather, roundness
   vig2: vec4<f32>,          // vignette highlight protection; distance band edges (near|middle, middle|far) and crossfade
-  hdr: vec4<f32>,           // x: write the HDR gain (1) or not (0)
+  hdr: vec4<f32>,           // x: write the HDR gain (1) or not (0); y: img rendering on, z: its purity, w: its strength
   dsem: array<vec4<f32>, 9>,  // by distance (near, middle, far), relative to the region: 3 vec4 each, laid out like sem
   lay: vec4<u32>,           // adjustment layers (layers.wgsl): count, atlas rows; z: distance bands with detail settings (bits 0–2)
   teq: vec4<f32>,           // tone equalizer (src/tone/toneEq.ts): detail (0 none … 3 smooth, −1 off), mask exposure, mask contrast
@@ -457,6 +457,70 @@ fn tone_gain(ev: f32) -> f32 {
   return max(textureSampleLevel(tone_lut, lsamp, vec2<f32>(x, 0.5), 0.0).g, 1.0);
 }
 
+// ------------------------------------------------------------------ img rendering
+// Our display rendering (the principles of open display transforms, our own maths):
+//  1. the tone curve on a norm of RGB (luminance blended with the largest channel),
+//     so bright saturated colours are compressed in time, not left to clip;
+//  2. purity: chroma follows how much the curve compressed the pixel — full in the
+//     mid-tones, rolling off where the shoulder flattens toward white (a smooth path
+//     to white, no threshold), in OkLab so hue holds;
+//  3. saturation by lightness: a little less in the deepest shadows (noise), a touch
+//     more around the mid-tones (u.hdr.z: purity / colour intensity, −1 … 1);
+//  4. neutrals stay neutral: nothing that adds chroma acts below the noise floor;
+//  5. gamut: chroma reduced toward the P3 boundary at the same lightness and hue, with
+//     a soft knee (no clipped channel, no hue shift).
+fn img_in_gamut(l: vec3<f32>) -> bool {
+  let p = P3_FROM_SRGB * oklab_to_lin_srgb(l);
+  return all(p >= vec3<f32>(-1e-4)) && all(p <= vec3<f32>(1.0 + 1e-4));
+}
+fn img_render(c: vec3<f32>, Y: f32, quiet: f32) -> vec3<f32> {
+  let cp = max(c, vec3<f32>(0.0));
+  // Mid-tones: the curve on luminance (a saturated colour keeps its brightness);
+  // toward the shoulder: on the norm, so a bright saturated colour is compressed as
+  // early as its brightest channel needs, instead of clipping.
+  let Yd0 = tone_curve(log2(max(Y, 1e-7)));
+  let nrm = max(mix(Y, max(cp.r, max(cp.g, cp.b)), 0.45), 1e-7);
+  let le = log2(nrm);
+  let Nd = tone_curve(le);
+  let wsh = smoothstep(0.5, 0.92, Nd);
+  var rgb = cp * mix(Yd0 / max(Y, 1e-7), Nd / nrm, wsh);
+  // The curve's local slope (log–log) at the norm: 1 = no compression, → 0 on the shoulder.
+  let slope = clamp(log2(max(tone_curve(le + 0.25), 1e-6) / max(tone_curve(le - 0.25), 1e-6)) / 0.5, 0.0, 1.5);
+  var lab = lin_srgb_to_oklab(P3_TO_SRGB * (REC2020_TO_P3 * rgb));
+  var C = length(lab.yz);
+  if (C > 1e-6) {
+    let purity = u.hdr.z;
+    // 2. purity follows compression, only where the shoulder begins (mid-tones keep their
+    //    colour); toward white as it flattens.
+    var k = mix(1.0, pow(clamp(slope, 0.0, 1.0), 0.45), wsh) * (1.0 - smoothstep(0.9, 1.0, lab.x) * 0.9);
+    // 3. saturation by lightness (a quieter deep shadow, a fuller mid-tone), scaled by purity.
+    let mid = exp(-pow((lab.x - 0.55) / 0.25, 2.0));
+    var g = mix(0.94, 1.0, smoothstep(0.04, 0.25, lab.x)) * (1.0 + 0.10 * purity * mid);
+    g *= 1.0 - quiet * (1.0 - smoothstep(0.25, 0.6, lab.x));
+    // 4. neutrals: gains above 1 only where there is real colour.
+    let nw = smoothstep(0.012, 0.045, C);
+    g = select(g, mix(min(g, 1.0), g, nw), g > 1.0);
+    k = k * g * (1.0 + 0.25 * purity * nw);
+    lab = vec3<f32>(min(lab.x, 1.0), lab.yz * k);
+    C = C * k;
+    // 5. gamut: the largest chroma at this lightness and hue (bisection on scale),
+    //    and a soft knee from 80 % of it.
+    if (C > 1e-6) {
+      var lo = 0.0; var hi = 2.0;
+      for (var it = 0; it < 8; it++) {
+        let m = 0.5 * (lo + hi);
+        if (img_in_gamut(vec3<f32>(lab.x, lab.yz * m))) { lo = m; } else { hi = m; }
+      }
+      let Cb = C * lo; // boundary chroma
+      let x = C / max(Cb, 1e-6);
+      let knee = 0.8;
+      let y = select(x, knee + (1.0 - knee) * tanh((x - knee) / (1.0 - knee)), x > knee);
+      lab = vec3<f32>(lab.x, lab.yz * (y / max(x, 1e-6)));
+    }
+  }
+  return clamp(P3_FROM_SRGB * oklab_to_lin_srgb(lab), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 fn soft_detail(d: f32, gain: f32, k: f32) -> f32 {
   // Boost small detail by `gain`, large (edge-sized) detail progressively less — halo guard.
   let extra = (gain - 1.0) * d / (1.0 + k * abs(d) * max(gain - 1.0, 0.0));
@@ -632,24 +696,29 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let dbg = u.flags.w == 1u || u.flags.w == 2u || u.flags.w == 4u || u.flags.w == 5u;
     textureStore(gain_out, tp, vec4<f32>(select(tone_gain(log2(Y)), 1.0, dbg), 0.0, 0.0, 0.0));
   }
-  var cd = c * (Yd / Y);
   // Lifted shadows keep their colour ratio, so a near-black blue or red would come
   // up vivid (and chroma noise with it). Film and good raw converters quieten
   // colour in opened-up shadows: pull toward grey in proportion to the lift,
   // only in the dark tones.
   let lifted = max(Lp - L, 0.0);
-  cd = mix(cd, vec3<f32>(Yd), clamp(lifted / 2.5, 0.0, 1.0) * 0.6 * (1.0 - smoothstep(0.08, 0.4, Yd)));
-  // Path to white: chroma rolls off as display luminance approaches 1.
-  let wmix = smoothstep(0.82, 1.0, Yd);
-  cd = mix(cd, vec3<f32>(Yd), wmix * 0.85);
-  // Working Rec.2020 → display P3, soft gamut compression toward luminance.
+  let quiet = clamp(lifted / 2.5, 0.0, 1.0) * 0.6;
+  // Classic rendering: the curve on luminance as a ratio, path to white above display
+  // 0.82, gamut by mixing toward luminance.
+  var cd = c * (Yd / Y);
+  cd = mix(cd, vec3<f32>(Yd), quiet * (1.0 - smoothstep(0.08, 0.4, Yd)));
+  cd = mix(cd, vec3<f32>(Yd), smoothstep(0.82, 1.0, Yd) * 0.85);
   var p3 = REC2020_TO_P3 * cd;
   let Yp = dot(p3, LUMAP3);
   let mn = min(p3.r, min(p3.g, p3.b));
   if (mn < 0.0) { p3 = mix(p3, vec3<f32>(Yp), clamp(-mn / max(Yp - mn, 1e-6), 0.0, 1.0)); }
   let mx = max(p3.r, max(p3.g, p3.b));
   if (mx > 1.0) { p3 = mix(p3, vec3<f32>(min(Yp, 1.0)), clamp((mx - 1.0) / max(mx - Yp, 1e-6), 0.0, 1.0)); }
-  var e = srgb_oetf(clamp(p3, vec3<f32>(0.0), vec3<f32>(1.0)));
+  p3 = clamp(p3, vec3<f32>(0.0), vec3<f32>(1.0));
+  // img rendering (u.hdr.y = 1): blended over the classic by strength u.hdr.w.
+  if (u.hdr.y > 0.5 && u.hdr.w > 0.0) {
+    p3 = mix(p3, img_render(c, Y, quiet), clamp(u.hdr.w, 0.0, 1.0));
+  }
+  var e = srgb_oetf(p3);
 
   // --- adjustment layers (layers.wgsl): the automatic grade and the user's own ---------------
   // Where the tone curves always ran: before the global colour stage and clean whites.

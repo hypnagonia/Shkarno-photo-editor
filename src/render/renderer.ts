@@ -278,7 +278,9 @@ export class Renderer {
     const v = p.vignette ?? { amount: 0, midpoint: 0.5, feather: 0.6, roundness: 0.3, highlights: 0.5 };
     const db = p.depthBands ?? [0.33, 0.66];
     new Float32Array(buf, base.byteLength + 32, 8).set([v.amount, v.midpoint, v.feather, v.roundness, v.highlights, db[0], db[1], 0.06]);
-    new Float32Array(buf, base.byteLength + 64, 4).set([gainT ? 1 : 0, 0, 0, 0]);
+    // hdr: write the HDR gain; y z w: the img rendering (on, purity, strength).
+    const rd = p.render;
+    new Float32Array(buf, base.byteLength + 64, 4).set([gainT ? 1 : 0, rd?.engine === "img" ? 1 : 0, rd?.purity ?? 0, rd?.strength ?? 1]);
     // By distance and by region at a distance: relative settings, then which are active.
     const regionsOn = p.enable.semantic;
     new Float32Array(buf, base.byteLength + 80, 36).set(DEPTH_BANDS.flatMap((b) => semVec(p.distance?.[b])));

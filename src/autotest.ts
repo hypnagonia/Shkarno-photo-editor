@@ -16,6 +16,8 @@ export interface AutotestApp {
   openFile: (f: File) => void;
   params: () => Params | undefined;
   pushParams: () => void;
+  /** Develop's "Zero all" (every control neutral). */
+  zero: () => void;
   send: (m: ToWorker) => void;
   /** Every message from the engine; returns an unsubscribe. */
   on: (fn: (m: FromWorker) => void) => () => void;
@@ -102,6 +104,20 @@ export async function runAutotest(app: AutotestApp) {
     for (const s of steps) {
       if (s === "open") await open("open");
       else if (s === "snap") await saveExport("snap");
+      else if (s === "bright") {
+        // +2 EV: bright colours into the shoulder (where renderings differ most).
+        const p = app.params(); if (!p) throw new Error("no photo");
+        const done = finalPreview("bright"); p.exposure += 2; app.pushParams(); await done; await settle();
+      }
+      else if (s === "classic") {
+        // The classic display rendering, for comparison with img.
+        const p = app.params(); if (!p) throw new Error("no photo");
+        const done = finalPreview("classic");
+        p.render = { ...(p.render ?? { purity: 0, strength: 1 }), engine: "classic" };
+        app.pushParams(); await done; await settle();
+        if (q.has("save")) await saveExport("classic");
+      }
+      else if (s === "zero") { const done = finalPreview("zero"); app.zero(); await done; await settle(); if (q.has("save")) await saveExport("zero"); }
       else if (s === "ceq") {
         // Contrast equalizer: a preset (?ceq=id, default clarity), then an export (strips: seams would show).
         const p = app.params();

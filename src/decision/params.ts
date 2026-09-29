@@ -83,6 +83,12 @@ export interface Params {
     blacks: number; // −1..1
     contrast: number; // −1..1
     rolloff: number; // 0..1 shoulder softness
+    /**
+     * The source is already rendered for display (JPEG / HEIC): the tone curve is the
+     * identity, and the settings above act as changes to it (curves.ts). Absent = a
+     * scene-referred RAW.
+     */
+    displayReferred?: boolean;
   };
   local: {
     /** Compression of the large-scale (coarse base) log range, 0..0.8. */
@@ -165,6 +171,13 @@ export interface Params {
   grain: { amount: number; size: number; roughness: number; color: number };
   /** Tone equalizer (src/tone/toneEq.ts): exposure by brightness zone of a smoothed mask. Absent = off. */
   toneEq?: ToneEq;
+  /**
+   * Display rendering: "img" (tone curve on an RGB norm, hue-preserving purity and
+   * gamut compression, saturation by lightness — render_tone.wgsl img_render) or the
+   * classic luminance-ratio rendering; purity −1 … 1, strength 0 … 1 (img over classic).
+   * Absent = classic (edits saved before it existed look as they did).
+   */
+  render?: { engine: "img" | "classic"; purity: number; strength: number };
   /** Contrast equalizer (src/tone/contrastEq.ts): local contrast by size of detail. Absent = off. */
   contrastEq?: ContrastEq;
   /**
@@ -220,6 +233,7 @@ export function defaultParams(): Params {
     vignette: { amount: 0, midpoint: 0.5, feather: 0.6, roundness: 0.3, highlights: 0.5 },
     grain: { amount: 0, size: 0.35, roughness: 0.5, color: 0 },
     dof: { focus: 0.3, strength: 0, points: [], auto: false },
+    render: { engine: "img", purity: 0, strength: 1 },
   };
 }
 

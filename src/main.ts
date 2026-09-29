@@ -872,6 +872,15 @@ protectToggle.onchange = () => {
   nextLabel = t("adj.protectHighlights");
   pushParams();
 };
+// Display rendering: img (render_tone.wgsl img_render) or the classic one.
+const imgToggle = el("input", { type: "checkbox" });
+imgToggle.onchange = () => {
+  if (!params) return;
+  params.render = { ...(params.render ?? { purity: 0, strength: 1 }), engine: imgToggle.checked ? "img" : "classic" };
+  nextLabel = t("adj.imgRender");
+  lookPanel.invalidate();
+  pushParams();
+};
 const aeToggle = el("input", { type: "checkbox" });
 aeToggle.checked = autoExposure;
 const aeNote = el("span", { class: "muted" });
@@ -891,6 +900,10 @@ adjustPane.append(
   slider({ path: "tone.contrast", label: t("adj.contrast"), min: -1, max: 1, step: 0.01, fmt: pct }),
   slider({ path: "tone.rolloff", label: t("adj.rolloff"), min: 0, max: 1, step: 0.01, fmt: pct }),
   el("label", { class: "toggle" }, el("span", {}, t("adj.protectHighlights") + " ", el("span", { class: "muted", text: t("adj.protectHighlightsNote") })), protectToggle),
+  el("div", { class: "group-title", text: t("adj.rendering") }),
+  el("label", { class: "toggle" }, el("span", {}, t("adj.imgRender") + " ", el("span", { class: "muted", text: t("adj.imgRenderNote") })), imgToggle),
+  slider({ path: "render.purity", label: t("adj.purity"), min: -1, max: 1, step: 0.01, fmt: pct }),
+  slider({ path: "render.strength", label: t("adj.renderStrength"), min: 0, max: 1, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%` }),
   slider({ path: "hdr.headroom", label: t("adj.hdrHeadroom"), min: 0, max: 3, step: 0.25, fmt: (v) => (v ? `+${v.toFixed(2)} EV` : t("adj.hdrOff")) }),
   el("div", { class: "group-title", text: t("adj.wb") }),
   slider({ path: "wb.temp", label: t("adj.temp"), min: 2000, max: 12000, step: 10, fmt: (v) => `${Math.round(v)}K` }),
@@ -977,7 +990,7 @@ function neutralParams(p: Params): Params {
   const d = defaultParams(), n = structuredClone(p);
   n.exposure = 0;
   n.wb = { ...(cameraWB ?? d.wb) };
-  n.tone = { ...d.tone };
+  n.tone = { ...d.tone, displayReferred: p.tone.displayReferred };
   n.local = { ...d.local, anchorEV: p.local.anchorEV };
   n.color = { ...d.color };
   n.curves = d.curves;
@@ -1556,7 +1569,7 @@ function syncControls() {
   layersPanel.render();
   renderLooks();
   renderStageToggles();
-  if (params) { dofToggle.checked = params.enable.dof; protectToggle.checked = params.protectHighlights !== false; }
+  if (params) { dofToggle.checked = params.enable.dof; protectToggle.checked = params.protectHighlights !== false; imgToggle.checked = params.render?.engine === "img"; }
   renderRings();
   renderZones();
   renderBands();
@@ -1704,6 +1717,8 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
           pendingRestore.layers = [...params!.layers.filter((f) => f.auto && kept.has(f.auto)), ...pendingRestore.layers.filter((l) => !l.auto)];
           pendingRestore.autoLayersVersion = AUTO_LAYERS_VERSION;
         }
+        // Edits saved before the img rendering existed keep the rendering they were made with.
+        if (!pendingRestore.render) pendingRestore.render = { engine: "classic", purity: 0, strength: 1 };
         // Same photo, same analysis: bring back the edits made before the reload.
         params = { ...params!, ...pendingRestore, enable: { ...params!.enable, ...pendingRestore.enable } };
         params.profile = normalizeProfile(params.profile);
@@ -1869,6 +1884,7 @@ if (autotestAllowed()) {
   void import("./autotest.ts").then(({ runAutotest }) => {
     const start = () => runAutotest({
       openFile: (f) => openFile(f), params: () => params, pushParams, send,
+      zero: () => zeroBtn.click(),
       on: (fn) => { engineListeners.add(fn); return () => engineListeners.delete(fn); },
     });
     // After the engine is ready (the first "ready" message).

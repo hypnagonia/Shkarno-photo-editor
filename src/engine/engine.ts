@@ -838,7 +838,7 @@ export class Engine {
     e.denoise = false; e.localTone = false; e.semantic = false; e.dehaze = false; e.sharpen = false; e.dof = false; e.curves = false;
     p.exposure = 0;
     p.wb = { temp: s.work.camera?.temp ?? 6504, tint: s.work.camera?.tint ?? 0 };
-    p.tone = { highlights: 0, shadows: 0, whites: 0, blacks: 0, contrast: 0, rolloff: 0.5 };
+    p.tone = { highlights: 0, shadows: 0, whites: 0, blacks: 0, contrast: 0, rolloff: 0.5, displayReferred: s.params.tone.displayReferred };
     p.color = { saturation: 0, vibrance: 0 };
     if (p.vignette) p.vignette = { ...p.vignette, amount: 0 };
     if (p.grain) p.grain = { ...p.grain, amount: 0 };
