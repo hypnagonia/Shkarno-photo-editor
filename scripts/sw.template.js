@@ -73,7 +73,10 @@ self.addEventListener("message", (e) => {
   if (e.data?.type !== "keep-runtime") return;
   e.waitUntil((async () => {
     const c = await caches.open(RUNTIME);
-    for (const p of seen) if (!(await c.match(p))) await c.add(p).catch(() => {});
+    // Also what the page names (a runtime a feature will need, not yet used here).
+    for (const p of new Set([...seen, ...(e.data.also ?? []).filter((x) => typeof x === "string" && x.startsWith("/ort/"))])) {
+      if (!(await c.match(p))) await c.add(p).catch(() => {});
+    }
   })());
 });
 

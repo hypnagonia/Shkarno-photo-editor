@@ -11,6 +11,7 @@
  */
 import * as ortWebgpu from "onnxruntime-web";
 import type * as Ort from "onnxruntime-web";
+import { MODEL_CACHE } from "./modelCache.ts";
 import * as ortCpu from "onnxruntime-web/wasm";
 
 /**
@@ -49,7 +50,7 @@ export const MODELS: Record<ModelSpec["id"], ModelSpec> = {
   samDecoder: { id: "samDecoder", f16: "sam-decoder-multi.onnx", f32: "sam-decoder-multi.onnx", bytes: 16.5e6 },
 };
 
-const CACHE = "image-improver2-models-v1";
+const CACHE = MODEL_CACHE;
 
 /** A download that retrying will not fix (wrong URL, a web page instead of the model). */
 class ModelError extends Error {}
