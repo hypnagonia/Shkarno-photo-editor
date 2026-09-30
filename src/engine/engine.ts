@@ -16,7 +16,7 @@
  * their output — but it would delay the first preview.
  */
 import { Gpu } from "../gpu/gpu.ts";
-import { halvesToFloats } from "../gpu/half.ts";
+import { floatsToHalves, halvesToFloats } from "../gpu/half.ts";
 import { decodeFile } from "../decode/decode.ts";
 import type { DecodedImage } from "../decode/types.ts";
 import { develop, type WorkingImage } from "../raw/develop.ts";
@@ -54,6 +54,10 @@ import type { CameraColor } from "../color/dng.ts";
 import { srgbEotf, srgbOetf } from "../color/transfer.ts";
 import { linSrgbToOklab } from "../color/oklab.ts";
 import { SamSelector } from "../neural/sam.ts";
+import { featherMask, prefixKeys, resize, strokeMask, strokeRect, type Rect } from "../retouch/geometry.ts";
+import { WorkerInpainter, type Inpainter } from "../retouch/inpaint.ts";
+import { fromDisplay, toDisplay } from "../restore/display.ts";
+import type { RetouchStroke } from "../decision/params.ts";
 import { isPhone, phoneForced } from "../device.ts";
 import { levelsByArea, selectionMask } from "../refine/selection.ts";
 import { selectKey, type MaskShape } from "../layers/model.ts";
@@ -115,6 +119,12 @@ interface Session {
   upscale?: UpscaleInfo;
   /** Tap-to-select: the photo's selector, masks by selection, and the texture the renderer samples. */
   sel?: Selections;
+  /**
+   * Magic brush: the strokes filled in so far, in order — each with the pixels it replaced
+   * (rgba16 of the working texture, and of the restored one when separate), so undoing it
+   * puts them back exactly — and the network that fills them.
+   */
+  retouch?: { applied: Array<{ key: string; rect: Rect; before: Uint16Array[] }>; failed?: string; painter?: Inpainter };
 }
 
 interface Selections {
@@ -289,6 +299,7 @@ export class Engine {
     if (s.denoised !== s.work.tex) g.release(s.denoised);
     g.release(s.work.tex, s.skin);
     if (s.sel) { s.sel.sam.dispose(); g.release(s.sel.tex); this.renderer.selection = undefined; }
+    s.retouch?.painter?.dispose();
     this.releaseProxy(s);
     releaseRefined(g, s.maps);
     this.renderer.releaseTargets();
@@ -747,6 +758,7 @@ export class Engine {
         s.work = { ...s.work, tex: out, width: 2 * W, height: 2 * H };
         s.denoised = out;
         s.scale = 2;
+        this.scaleRetouch(s, 2);
         this.dropThumb();
         P.add("2× upscale (Swin2SR)", performance.now() - t0, `${W}×${H} → ${2 * W}×${2 * H} on ${backend}, ${tiles} tiles`);
         Object.assign(info, { state: "applied", upscaleApplied: true, upscaleFactor: 2, width: 2 * W, height: 2 * H });
@@ -1520,6 +1532,7 @@ export class Engine {
    * phone), then points the renderer at it. Cheap when nothing changed.
    */
   private async ensureSelections(s: Session, p: Params) {
+    await this.ensureRetouch(s, p); // (the photo itself first: masks are read from it)
     const want: MaskShape[] = [];
     for (const l of p.layers ?? []) for (const m of [l.mask, ...(l.mask.parts ?? [])]) if (m.kind === "select" && m.points?.length) want.push(m);
     const keys = [...new Set(want.map(selectKey))];
@@ -1543,6 +1556,100 @@ export class Engine {
     st.keys = keys;
     st.version++;
     this.renderer.selection = { tex: st.tex, slotOf: (m) => ready.indexOf(selectKey(m)), version: st.version };
+  }
+
+  /**
+   * Magic brush: the working image as `p.retouch` says. Strokes already filled while the
+   * ones before them are unchanged stay; from the first that differs, fills are undone
+   * (last first, their pixels put back) and the rest filled again, in order.
+   */
+  private async ensureRetouch(s: Session, p: Params) {
+    const want = p.retouch ?? [];
+    if (!want.length && !s.retouch?.applied.length) return;
+    const st = (s.retouch ??= { applied: [] });
+    const keys = prefixKeys(want);
+    let k = 0;
+    while (k < st.applied.length && k < keys.length && st.applied[k].key === keys[k]) k++;
+    // (A stroke that failed is not tried again until the strokes change.)
+    const done = k === st.applied.length && (k === keys.length || st.failed === keys[k]);
+    if (done) return;
+    for (let i = st.applied.length - 1; i >= k; i--) this.writeCrop(s, st.applied[i].rect, st.applied[i].before);
+    st.applied.length = k;
+    st.failed = undefined;
+    for (let i = k; i < want.length; i++) {
+      this.progress("retouch", want.length - k > 1 ? `${i - k + 1}/${want.length - k}` : undefined);
+      try { st.applied.push({ key: keys[i], ...(await this.inpaintStroke(s, st, want[i])) }); }
+      catch (e) {
+        st.failed = keys[i];
+        const msg = e instanceof Error ? e.message : String(e);
+        this.log(`magic brush failed: ${msg}`);
+        this.post({ type: "error", message: `Magic brush: ${msg}`, stage: "retouch" });
+        break;
+      }
+    }
+    this.dropThumb();
+    await this.makeProxy();
+  }
+
+  /** Fills one stroke: its region to display RGB, the network, then laid back in linear light inside a soft edge. */
+  private async inpaintStroke(s: Session, st: NonNullable<Session["retouch"]>, stroke: RetouchStroke): Promise<{ rect: Rect; before: Uint16Array[] }> {
+    const W = s.work.width, H = s.work.height;
+    const rect = strokeRect(stroke, W, H);
+    const texes = s.denoised !== s.work.tex ? [s.work.tex, s.denoised] : [s.work.tex];
+    const before: Uint16Array[] = [];
+    for (const t of texes) before.push(new Uint16Array(await this.gpu.readTexture(t, rect.x, rect.y, rect.w, rect.h, 8)));
+    const n = rect.w * rect.h;
+    // The network sees the restored image (cleaner), in display RGB.
+    const src = halvesToFloats(before[before.length - 1]);
+    const img = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) img[i * 3 + c] = toDisplay(src[i * 4 + c] * s.gain);
+    const long = Math.max(W, H);
+    const hole = strokeMask(stroke, W, H, rect, rect.w, rect.h, Math.max(2, Math.round(long / 1000)));
+    const model = isMobile() ? "migan" : "lama";
+    st.painter ??= new WorkerInpainter(model, this.base, phoneForced(), {
+      log: (t) => this.log(t),
+      progress: (loaded, total) => this.progress(`download ${model}`, `${(loaded / 1e6).toFixed(0)} / ${(total / 1e6).toFixed(0)} MB`, loaded / total),
+    });
+    const t0 = performance.now();
+    const fill = await st.painter.run(img, rect.w, rect.h, hole);
+    this.log(`magic brush: ${rect.w}×${rect.h} region filled in ${Math.round(performance.now() - t0)} ms`);
+    const a = featherMask(hole, rect.w, rect.h, Math.max(3, rect.w / 128));
+    const lin = new Float32Array(n * 3);
+    for (let i = 0; i < n * 3; i++) lin[i] = fromDisplay(fill[i]) / s.gain;
+    texes.forEach((t, j) => {
+      const f = halvesToFloats(before[j]);
+      for (let i = 0; i < n; i++) {
+        const w = a[i];
+        if (w <= 0) continue;
+        for (let c = 0; c < 3; c++) f[i * 4 + c] += (lin[i * 3 + c] - f[i * 4 + c]) * w;
+        f[i * 4 + 3] *= 1 - w; // (alpha: the clipped share — a fill is not clipped)
+      }
+      this.writeTexels(t, rect, floatsToHalves(f));
+    });
+    return { rect, before };
+  }
+
+  /** Puts a fill's replaced pixels back (into the working texture, and the restored one when separate). */
+  private writeCrop(s: Session, rect: Rect, before: Uint16Array[]) {
+    const texes = s.denoised !== s.work.tex ? [s.work.tex, s.denoised] : [s.work.tex];
+    texes.forEach((t, j) => this.writeTexels(t, rect, before[j] ?? before[0]));
+  }
+
+  private writeTexels(t: GPUTexture, rect: Rect, data: Uint16Array) {
+    this.gpu.device.queue.writeTexture({ texture: t, origin: { x: rect.x, y: rect.y } }, data as Uint16Array<ArrayBuffer>, { bytesPerRow: rect.w * 8, rowsPerImage: rect.h }, { width: rect.w, height: rect.h });
+  }
+
+  /** The 2× stage swapped the working image: the fills' saved pixels and regions follow (bilinear — undo there is a touch softer). */
+  private scaleRetouch(s: Session, k: number) {
+    const st = s.retouch;
+    if (!st?.applied.length) return;
+    const texes = s.denoised !== s.work.tex ? 2 : 1;
+    st.applied = st.applied.map((a) => {
+      const r = { x: a.rect.x * k, y: a.rect.y * k, w: a.rect.w * k, h: a.rect.h * k };
+      // (One texture now: the upscaler worked from the restored one, the last kept.)
+      const before = a.before.slice(a.before.length - texes).map((b) => floatsToHalves(resize(halvesToFloats(b), a.rect.w, a.rect.h, 4, r.w, r.h)));
+      return { key: a.key, rect: r, before };
+    });
   }
 
   /** One selection's mask at the guide resolution: SAM's reading for its taps, snapped to the photo's edges. */

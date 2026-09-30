@@ -37,3 +37,15 @@ MobileSAM (tap-to-select masks) — Apache License 2.0
 Depth Anything V2 Small — Apache License 2.0
   Lihe Yang et al., "Depth Anything V2", 2024. https://github.com/DepthAnything/Depth-Anything-V2
   ONNX conversion: https://huggingface.co/onnx-community/depth-anything-v2-small
+
+LaMa (magic brush, on computers) — Apache License 2.0
+  Roman Suvorov et al., "Resolution-robust Large Mask Inpainting with Fourier
+  Convolutions", WACV 2022. https://github.com/advimman/lama
+  ONNX export (big-lama, fixed 512×512): https://huggingface.co/Carve/LaMa-ONNX (Apache-2.0).
+  Weights stored in fp16, split in parts: scripts/models/lama.py.
+
+MI-GAN (magic brush, on phones) — MIT License, © 2024 Picsart AI Research
+  Andranik Sargsyan et al., "MI-GAN: A Simple Baseline for Image Inpainting on Mobile
+  Devices", ICCV 2023. https://github.com/Picsart-AI-Research/MI-GAN
+  ONNX export: https://huggingface.co/andraniksargsyan/migan (mirror:
+  https://huggingface.co/edgetools/migan), unchanged: scripts/models/migan.py.

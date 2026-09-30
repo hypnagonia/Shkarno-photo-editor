@@ -180,6 +180,12 @@ export interface Params {
    * look as they did, their `grain` above included).
    */
   film?: Film;
+  /**
+   * Magic brush (src/retouch): strokes painted over what should disappear, in order — each
+   * filled in by inpainting (LaMa; MI-GAN on phones). Points 0…1 of the picture, radius a
+   * share of its long side. The fills are derived (rebuilt from the strokes after a reload).
+   */
+  retouch?: RetouchStroke[];
   /** Tone equalizer (src/tone/toneEq.ts): exposure by brightness zone of a smoothed mask. Absent = off. */
   toneEq?: ToneEq;
   /**
@@ -250,6 +256,8 @@ export function defaultParams(): Params {
     render: { engine: "img", purity: 0, strength: 1 },
   };
 }
+
+export interface RetouchStroke { pts: Array<[number, number]>; r: number }
 
 export type FilmCharacter = "off" | "clean" | "negative" | "cinema";
 export interface Film { character: FilmCharacter; strength: number; format: number }

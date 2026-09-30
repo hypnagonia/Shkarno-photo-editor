@@ -13,6 +13,7 @@ import * as ortWebgpu from "onnxruntime-web";
 import type * as Ort from "onnxruntime-web";
 import { MODEL_CACHE } from "./modelCache.ts";
 import * as ortCpu from "onnxruntime-web/wasm";
+import * as ortNative from "onnxruntime-web/webgpu";
 
 /**
  * The ONNX Runtime in use. The engine has the WebGPU-capable build; workers that
@@ -22,19 +23,28 @@ import * as ortCpu from "onnxruntime-web/wasm";
  */
 export let ort = ortWebgpu;
 export function useCpuRuntime() { ort = ortCpu as unknown as typeof ortWebgpu; }
+/**
+ * ORT's native WebGPU execution provider (the C++ one, not the JavaScript JSEP kernels the
+ * engine uses): the JSEP kernels break on LaMa's Fourier units (a reshape and an Add fail),
+ * the native ones run it. For a worker of its own (the magic brush on computers), before
+ * anything loads a runtime; WebAssembly stays available in the same build.
+ */
+export function useNativeWebgpuRuntime() { ort = ortNative as unknown as typeof ortWebgpu; }
 import type { Gpu } from "../gpu/gpu.ts";
 import { isIOS } from "../device.ts";
 
 export type Backend = "webgpu" | "wasm";
 
 export interface ModelSpec {
-  id: "segformer" | "depth" | "swin2sr" | "samEncoder" | "samDecoder";
+  id: "segformer" | "depth" | "swin2sr" | "samEncoder" | "samDecoder" | "lama" | "migan";
   /** File for WebGPU with shader-f16. */
   f16: string;
   /** File for everything else. */
   f32: string;
   /** Approximate bytes for progress reporting. */
   bytes: number;
+  /** Stored in this many parts (`<file>.part0` …): files over 100 MB are refused by the host; joined on download. */
+  parts?: number;
 }
 
 export const MODELS: Record<ModelSpec["id"], ModelSpec> = {
@@ -48,6 +58,11 @@ export const MODELS: Record<ModelSpec["id"], ModelSpec> = {
   // ≈ 2 GB) and SAM's prompt/mask decoder. Downloaded on first use of Pick.
   samEncoder: { id: "samEncoder", f16: "mobile-sam-encoder.onnx", f32: "mobile-sam-encoder.onnx", bytes: 28.2e6 },
   samDecoder: { id: "samDecoder", f16: "sam-decoder-multi.onnx", f32: "sam-decoder-multi.onnx", bytes: 16.5e6 },
+  // Magic brush (src/retouch): LaMa on computers — big-lama, fixed 512², weights stored fp16 and
+  // computed fp32 (scripts/models/lama.py; a true fp16 graph overflows) — in three parts.
+  lama: { id: "lama", f16: "lama.fp16.onnx", f32: "lama.fp16.onnx", bytes: 106.5e6, parts: 3 },
+  // … and MI-GAN on phones: a tenth of LaMa's cost, any size (it resizes to 512 inside).
+  migan: { id: "migan", f16: "migan.onnx", f32: "migan.onnx", bytes: 28.1e6 },
 };
 
 const CACHE = MODEL_CACHE;
@@ -127,7 +142,7 @@ export class Neural {
     let out: Uint8Array | undefined;
     for (let attempt = 0; !out; attempt++) {
       try {
-        out = await this.download(url, spec);
+        out = spec.parts ? await this.downloadParts(url, spec) : await this.download(url, spec);
       } catch (e) {
         const permanent = e instanceof ModelError;
         if (permanent || attempt >= 3) throw e;
@@ -140,15 +155,33 @@ export class Neural {
     return out;
   }
 
-  /** One download attempt. A wrong answer from the server (a page, a 404) is a ModelError: no retry. */
-  private async download(url: string, spec: ModelSpec): Promise<Uint8Array> {
+  /** A model stored in parts: each downloaded in turn (progress over the whole), then joined. */
+  private async downloadParts(url: string, spec: ModelSpec): Promise<Uint8Array> {
+    const parts: Uint8Array[] = [];
+    let done = 0;
+    for (let i = 0; i < spec.parts!; i++) {
+      const p = await this.download(`${url}.part${i}`, spec, done, 0);
+      parts.push(p); done += p.byteLength;
+    }
+    const out = new Uint8Array(done);
+    let o = 0;
+    for (const p of parts) { out.set(p, o); o += p.byteLength; }
+    if (done < spec.bytes * 0.9) throw new Error(`Could not download ${spec.id} model (${done} bytes)`);
+    return out;
+  }
+
+  /**
+   * One download attempt. A wrong answer from the server (a page, a 404) is a ModelError: no retry.
+   * (`before`: bytes of earlier parts, for progress over a model in parts; `min`: the least a whole file may be.)
+   */
+  private async download(url: string, spec: ModelSpec, before = 0, min = spec.bytes * 0.3): Promise<Uint8Array> {
     const res = await fetch(url);
     if (!res.ok || !res.body) {
       if (res.status >= 500) throw new Error(`Could not download ${spec.id} model (${res.status})`);
       throw new ModelError(`Could not download ${spec.id} model (${res.status})`);
     }
     if ((res.headers.get("content-type") ?? "").includes("text/html")) throw new ModelError(`Could not download ${spec.id} model (got a web page instead)`);
-    const total = Number(res.headers.get("content-length")) || spec.bytes;
+    const total = spec.parts ? spec.bytes : Number(res.headers.get("content-length")) || spec.bytes;
     const reader = res.body.getReader();
     const chunks: Uint8Array[] = [];
     let loaded = 0;
@@ -157,12 +190,12 @@ export class Neural {
       if (done) break;
       chunks.push(value);
       loaded += value.byteLength;
-      this.onProgress?.(spec.id, loaded, total);
+      this.onProgress?.(spec.id, before + loaded, total);
     }
     const out = new Uint8Array(loaded);
     let o = 0;
     for (const c of chunks) { out.set(c, o); o += c.byteLength; }
-    if (loaded < spec.bytes * 0.3) throw new Error(`Could not download ${spec.id} model (${loaded} bytes)`);
+    if (loaded < min || loaded === 0) throw new Error(`Could not download ${spec.id} model (${loaded} bytes)`);
     return out;
   }
 

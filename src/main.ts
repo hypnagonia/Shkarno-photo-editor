@@ -7,6 +7,7 @@ import type { Capabilities, ExportFormat, FromWorker, StageProfile, Summary, ToW
 import { createToneEqPanel } from "./ui/toneEqPanel.ts";
 import { createContrastEqPanel } from "./ui/contrastEqPanel.ts";
 import { createFilmPanel } from "./ui/filmPanel.ts";
+import { createRetouchPanel } from "./ui/retouchPanel.ts";
 import { keepRuntimeWhenIdle } from "./pwa.ts";
 import logoSvg from "../public/logo.svg?raw";
 import { motionArrows } from "./layers/motion.ts";
@@ -93,10 +94,34 @@ const empty = el("div", { class: "empty" },
   el("button", { class: "btn primary", id: "open-btn", text: t("empty.open") }),
   el("p", { class: "muted fine", text: t("empty.fine") }),
 );
+// Magic brush: the stroke being painted (and, once released, until the fill arrives).
+const brushSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+brushSvg.classList.add("brush-guide");
+/** The Brush card is open: one finger paints; `radius` a share of the photo's long side. */
+const brush = { on: false, radius: 0.025 };
+let stroke: { pts: Array<[number, number]>; last: { x: number; y: number } } | undefined;
+/** A released stroke is shown until its fill comes back (the first final preview after the engine began filling). */
+let strokeShown = false, strokeFilling = false;
+function strokeDone() {
+  if (!strokeShown) return;
+  strokeShown = strokeFilling = false;
+  drawStroke(undefined);
+  badge.classList.remove("on");
+}
+function drawStroke(pts: Array<[number, number]> | undefined) {
+  if (!pts?.length) { brushSvg.replaceChildren(); return; }
+  const r = imageRect(), st = stage.getBoundingClientRect();
+  const X = (x: number) => r.left - st.left + x * r.width, Y = (y: number) => r.top - st.top + y * r.height;
+  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  p.setAttribute("d", pts.map(([x, y], i) => `${i ? "L" : "M"}${X(x)} ${Y(y)}`).join("") + (pts.length === 1 ? `L${X(pts[0][0]) + 0.01} ${Y(pts[0][1])}` : ""));
+  p.setAttribute("stroke-width", String(2 * brush.radius * Math.max(r.width, r.height)));
+  brushSvg.replaceChildren(p);
+}
+
 // Motion blur's arrows on the photo, while a Motion Blur layer is being adjusted.
 const motionSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
 motionSvg.classList.add("motion-guide");
-stage.append(empty, canvas, rings, motionSvg, badge, progress, fileInput);
+stage.append(empty, canvas, rings, motionSvg, brushSvg, badge, progress, fileInput);
 canvas.style.display = "none";
 
 // The editor (src/ui/editor/layersPanel.ts): a dock with the layer stack (top first,
@@ -662,6 +687,7 @@ stage.addEventListener("pointerdown", (e) => {
     endHold();
     if (drag?.moved) endDragRing(); else drag = undefined;
     press = undefined;
+    if (stroke) { stroke = undefined; drawStroke(undefined); } // (two fingers: a pinch, not paint)
     const [p1, p2] = [...pointers.values()];
     pinch = { d0: Math.hypot(p1.x - p2.x, p1.y - p2.y) || 1, z0: zoom, cx0: (p1.x + p2.x) / 2, cy0: (p1.y + p2.y) / 2, px0: panX, py0: panY };
     renderRings();
@@ -669,6 +695,14 @@ stage.addEventListener("pointerdown", (e) => {
   }
   if (pointers.size > 2) return;
   press = { x0: e.clientX, y0: e.clientY, px0: panX, py0: panY, moved: false };
+  if (brush.on) {
+    // Magic brush: one finger paints (no pan, no hold-to-compare).
+    const r = imageRect();
+    const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    if (x >= 0 && y >= 0 && x <= 1 && y <= 1 && !strokeShown) { stroke = { pts: [[x, y]], last: { x: e.clientX, y: e.clientY } }; drawStroke(stroke.pts); }
+    press = undefined;
+    return;
+  }
   if (maskPicking || toneEqPicking) {
     // A pick happens on release (a pan or a pinch picks nothing).
     const r = imageRect();
@@ -726,6 +760,15 @@ stage.addEventListener("pointermove", (e) => {
     applyZoom();
     return;
   }
+  if (stroke) {
+    // A point every few screen pixels.
+    if (Math.hypot(e.clientX - stroke.last.x, e.clientY - stroke.last.y) < 3) return;
+    const r = imageRect();
+    stroke.pts.push([clamp01((e.clientX - r.left) / r.width), clamp01((e.clientY - r.top) / r.height)]);
+    stroke.last = { x: e.clientX, y: e.clientY };
+    drawStroke(stroke.pts);
+    return;
+  }
   if (drag && params) {
     const r = imageRect();
     drag.x = clamp01((e.clientX - r.left) / r.width);
@@ -763,6 +806,18 @@ function endDragRing(cancelled = false) {
   renderRings();
 }
 function clamp01(v: number) { return Math.min(1, Math.max(0, v)); }
+/** A stroke's points, no two closer than `min` (share of the long side, in picture proportions): smaller params. */
+function thinStroke(pts: Array<[number, number]>, min: number): Array<[number, number]> {
+  const a = dispW() / Math.max(dispW(), dispH()), b = dispH() / Math.max(dispW(), dispH());
+  const out: Array<[number, number]> = [pts[0]];
+  for (const p of pts.slice(1)) {
+    const q = out[out.length - 1];
+    if (Math.hypot((p[0] - q[0]) * a, (p[1] - q[1]) * b) >= min) out.push(p);
+  }
+  const last = pts[pts.length - 1];
+  if (out[out.length - 1] !== last) out.push(last);
+  return out.map(([x, y]) => [Math.round(x * 1e4) / 1e4, Math.round(y * 1e4) / 1e4]);
+}
 const endHold = () => {
   clearTimeout(holdTimer);
   if (holding === "before") send({ ...baseView(), before: false });
@@ -776,6 +831,19 @@ function pointerEnd(e: PointerEvent) {
     if (pointers.size < 2) pinch = undefined;
     const rest = [...pointers.values()][0];
     press = rest ? { x0: rest.x, y0: rest.y, px0: panX, py0: panY, moved: true } : undefined;
+    return;
+  }
+  if (stroke) {
+    const s = stroke;
+    stroke = undefined;
+    if (e.type !== "pointerup" || !params) { drawStroke(undefined); return; }
+    // Painted: into the edit (the engine fills it); the stroke stays shown until it has.
+    params.retouch = [...(params.retouch ?? []), { pts: thinStroke(s.pts, brush.radius / 3), r: brush.radius }];
+    strokeShown = true;
+    badge.textContent = t("brush.working"); badge.classList.add("on");
+    nextLabel = t("brush.title");
+    pushParams();
+    retouchPanel.render();
     return;
   }
   endDragRing(e.type !== "pointerup");
@@ -1132,6 +1200,11 @@ const toneEqPanel = createToneEqPanel({
   pickMode: (on) => { toneEqPicking = on && !!params; },
 });
 
+const retouchPanel = createRetouchPanel({
+  params: () => params,
+  changed: (label) => { nextLabel = label; pushParams(); },
+  brush,
+});
 const filmPanel = createFilmPanel({
   params: () => params,
   changed: (label) => { nextLabel = label; pushParams(); },
@@ -1152,6 +1225,7 @@ const layersPanel = createLayersPanel(dockEl, propsEl, {
   toneEq: toneEqPanel,
   contrastEq: contrastEqTab,
   film: filmPanel,
+  retouch: retouchPanel,
   motionGuide: setMotionGuide,
   photoColors: () => askEngine({ type: "palette" }, (m) => (m.type === "palette" ? m.stats.palette.map((w) => w.hex) : undefined), [] as string[]),
   notice: (text) => { badge.textContent = text; badge.classList.add("on"); },
@@ -1744,6 +1818,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       setTimeout(() => location.reload(), 600);
       break;
     case "progress":
+      if (m.stage === "retouch" || m.stage.startsWith("download lama") || m.stage.startsWith("download migan")) strokeFilling = true;
       setProgress(stageText(m.stage, m.detail), m.frac);
       noteStage(stageText(m.stage, m.detail));
       // Only a crash *inside* segmentation or depth marks the device for CPU analysis.
@@ -1754,6 +1829,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       drawPreview(m);
       if (m.final && !holding) setProgress(undefined);
       if (m.final) markCompleted();
+      if (m.final && strokeFilling) strokeDone();
       if (m.final && pickAwaitsPreview) pickDone();
       if (m.final) exportTop.disabled = exportBtn.disabled || !params;
       void 0; // look thumbnails: the Look panel is hidden for now
@@ -1953,6 +2029,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       break;
     case "error":
       if (pickBusy) pickDone();
+      strokeDone();
       checkRun.disabled = false;
       noteAnalysisStage();
       opening = false;

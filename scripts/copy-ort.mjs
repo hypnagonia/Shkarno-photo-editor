@@ -4,6 +4,7 @@
 import { copyFileSync, mkdirSync } from "node:fs";
 const src = "node_modules/onnxruntime-web/dist/";
 mkdirSync("public/ort", { recursive: true });
-// The WebGPU-capable runtime (engine) and the plain WebAssembly one (CPU-only workers).
-for (const f of ["ort-wasm-simd-threaded.jsep.mjs", "ort-wasm-simd-threaded.jsep.wasm", "ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"]) copyFileSync(src + f, "public/ort/" + f);
+// The WebGPU-capable runtime (engine), the plain WebAssembly one (CPU-only workers) and the
+// native-WebGPU one (the magic brush's LaMa worker, src/neural/lamaWorker.ts).
+for (const f of ["ort-wasm-simd-threaded.jsep.mjs", "ort-wasm-simd-threaded.jsep.wasm", "ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm", "ort-wasm-simd-threaded.asyncify.mjs", "ort-wasm-simd-threaded.asyncify.wasm"]) copyFileSync(src + f, "public/ort/" + f);
 console.log("ORT runtime copied to public/ort");

@@ -50,6 +50,8 @@ type Ctx = {
    * (undefined). `layer` (its live index) when its mask may have changed: read it again.
    */
   motionGuide?: (b: LayerParams["blur"] | undefined, layer?: number) => void;
+  /** The Brush card: the magic brush (src/ui/retouchPanel.ts). */
+  retouch?: { el: HTMLElement; render: () => void; leave: () => void };
   /** The Film card: grain, halation, glow (src/ui/filmPanel.ts). */
   film?: { el: HTMLElement; render: () => void; leave: () => void };
   /** Taps on the photo pick what to mask (on, with a hint for the photo) or do what they normally do (off). */
@@ -64,7 +66,7 @@ type Ctx = {
 
 /** Layer types in the ＋ sheet (each type's icon has the type's name). */
 /** The cards that are not layers: always there, at the bottom of the stack. */
-type Fixed = "develop" | "toneEq" | "contrastEq" | "blur" | "film";
+type Fixed = "develop" | "retouch" | "toneEq" | "contrastEq" | "blur" | "film";
 
 const ADD: LayerType[] = ["curves", "hueSat", "basic", "blur", "fog", "light", "gradientMap", "gradientFill", "brightContrast", "exposure"];
 /** Fog colours: morning air, warm haze, city smog, dusk. */
@@ -162,7 +164,7 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
   }
 
   function renderDock() {
-    list.replaceChildren(...[...layers()].reverse().map((l) => card(l)), card(undefined, "develop"), ...(ctx.toneEq ? [card(undefined, "toneEq")] : []), ...(ctx.contrastEq ? [card(undefined, "contrastEq")] : []), card(undefined, "blur"), ...(ctx.film ? [card(undefined, "film")] : []));
+    list.replaceChildren(...[...layers()].reverse().map((l) => card(l)), card(undefined, "develop"), ...(ctx.retouch ? [card(undefined, "retouch")] : []), ...(ctx.toneEq ? [card(undefined, "toneEq")] : []), ...(ctx.contrastEq ? [card(undefined, "contrastEq")] : []), card(undefined, "blur"), ...(ctx.film ? [card(undefined, "film")] : []));
     list.querySelector(".lay-card.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
@@ -772,17 +774,19 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     const mb = l?.type === "blur" && tab === "adjust" ? (l.params as LayerParams["blur"]) : undefined;
     ctx.motionGuide?.(mb?.motion ? mb : undefined, mb?.motion && l ? liveIndex(l.id) : undefined);
     if (!l) {
-      if (selected !== "blur" && selected !== "toneEq" && selected !== "contrastEq" && selected !== "film") selected = "develop";
+      if (selected !== "blur" && selected !== "toneEq" && selected !== "contrastEq" && selected !== "film" && selected !== "retouch") selected = "develop";
       if (selected !== "blur") ctx.leftBlur?.();
       if (selected !== "toneEq") ctx.toneEq?.leave();
       if (selected !== "contrastEq") ctx.contrastEq?.leave();
-      const own = selected === "toneEq" ? ctx.toneEq : selected === "contrastEq" ? ctx.contrastEq : selected === "film" ? ctx.film : undefined;
+      if (selected !== "retouch") ctx.retouch?.leave();
+      const own = selected === "toneEq" ? ctx.toneEq : selected === "contrastEq" ? ctx.contrastEq : selected === "film" ? ctx.film : selected === "retouch" ? ctx.retouch : undefined;
       if (own) { props.replaceChildren(own.el); own.render(); }
       else props.replaceChildren(selected === "blur" ? ctx.blur : ctx.develop);
       applyMaskView();
       return;
     }
     ctx.leftBlur?.();
+    ctx.retouch?.leave();
     ctx.toneEq?.leave();
     ctx.contrastEq?.leave();
     const name = el("input", { class: "lay-title", value: layerName(l), "aria-label": t("lay.name") });

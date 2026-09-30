@@ -138,6 +138,26 @@ export async function runAutotest(app: AutotestApp) {
         app.pushParams(); await done; await settle();
         if (q.has("save")) await saveExport("classic");
       }
+      else if (s === "retouch") {
+        // Magic brush: ?stroke=x,y;x,y (0…1) &r=radius (share of the long side), exported as retouch.
+        const p = app.params(); if (!p) throw new Error("no photo");
+        const pts = (q.get("stroke") ?? "0.5,0.5").split(";").map((v) => v.split(",").map(Number) as [number, number]);
+        await mem();
+        await report("retouch:start");
+        const done = finalPreview("retouch");
+        p.retouch = [...(p.retouch ?? []), { pts, r: Number(q.get("r") ?? 0.02) }];
+        app.pushParams(); await done; await settle();
+        await report("retouch:done", { ...(await mem()), js: await jsMem() });
+        if (q.has("save")) await saveExport("retouch");
+      }
+      else if (s === "unretouch") {
+        // Undo the last magic brush stroke (its pixels put back), exported as unretouch.
+        const p = app.params(); if (!p) throw new Error("no photo");
+        const done = finalPreview("unretouch");
+        p.retouch = (p.retouch ?? []).slice(0, -1);
+        app.pushParams(); await done; await settle();
+        if (q.has("save")) await saveExport("unretouch");
+      }
       else if (s === "fog" || s === "light") {
         // A Fog / Light layer over the whole photo at its defaults, exported as fog / light (then removed).
         await addLayer(s, makeLayer(s, `Autotest ${s}`));

@@ -101,6 +101,7 @@ export default defineConfig(({ command }) => ({
     ? { alias: [
       { find: /^onnxruntime-web$/, replacement: fileURLToPath(new URL("./node_modules/onnxruntime-web/dist/ort.min.mjs", import.meta.url)) },
       { find: /^onnxruntime-web\/wasm$/, replacement: fileURLToPath(new URL("./node_modules/onnxruntime-web/dist/ort.wasm.min.mjs", import.meta.url)) },
+      { find: /^onnxruntime-web\/webgpu$/, replacement: fileURLToPath(new URL("./node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs", import.meta.url)) },
     ] }
     : {},
   define: { __ORT_EXTERNAL__: JSON.stringify(command === "build"), __BUILD__: JSON.stringify(Date.now().toString(36)) },
