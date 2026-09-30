@@ -223,7 +223,14 @@ export async function runAutotest(app: AutotestApp) {
       else if (s === "blur") await addLayer("blur", makeLayer("blur", "Autotest blur", { mask: { ...center, invert: true }, params: { amount: 0.5 } }));
       else if (s === "motion") {
         // Motion blur of everything but the picked subject (?angle=, default horizontal; ?parallax: into the depth; ?through: through the mask), exported as motion.
-        await addLayer("motion", makeLayer("blur", "Autotest motion", { mask: { ...center, invert: true }, params: { amount: 0.6, motion: true, angle: Number(q.get("angle") ?? 0), depth: q.has("parallax"), through: q.has("through") } }));
+        // ?pick=x,y: the object tapped there (default the centre); ?keep: blur it, not everything else.
+        // (Several taps: ?pick=x,y;x,y — one object built from them.)
+        const pts = (q.get("pick") ?? "").split(";").map((p) => p.split(",").map(Number)).filter((p) => p.length === 2 && p.every(Number.isFinite));
+        const pk = pts[0] ?? [];
+        // ?region=vehicle: a region of the segmentation instead of a tapped object.
+        const rg = q.get("region");
+        const at = rg ? { kind: "region" as const, region: rg as "vehicle", invert: false, feather: 1, density: 1 } : pk.length === 2 && pk.every(Number.isFinite) ? { ...center, points: pts.map((p) => [p[0], p[1], 1]) as Array<[number, number, 0 | 1]> } : center;
+        await addLayer("motion", makeLayer("blur", "Autotest motion", { mask: { ...at, invert: !q.has("keep") }, params: { amount: Number(q.get("amount") ?? 0.6), motion: true, angle: Number(q.get("angle") ?? 0), depth: q.has("parallax"), through: q.has("through") } }));
         if (q.has("save")) await saveExport("motion");
       }
       else if (s === "export") {
