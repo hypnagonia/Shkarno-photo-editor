@@ -1,4 +1,4 @@
-# Shkarno — engine and pipeline
+# <img src="../public/icon-192.png" width="36" height="36" alt="" align="absmiddle"> Shkarno — engine and pipeline
 
 Client-side photo development for iPhone ProRAW/DNG and HEIC. Everything runs
 in the browser: decoding in WebAssembly, image processing in WebGPU (WGSL),
