@@ -138,7 +138,7 @@ export function packLayers(layers: Layer[], autoStrength = 1, enable?: { curves?
         rows.push(cachedRow("g" + JSON.stringify(g.gradient), () => gradientTable(g.gradient, ATLAS_W)));
         break;
       }
-      case "blur": { const b = l.params as LayerParams["blur"]; p[0] = Math.max(0, b.amount); p[1] = b.motion ? 1 : 0; p[2] = ((b.angle ?? 0) * Math.PI) / 180; break; }
+      case "blur": { const b = l.params as LayerParams["blur"]; p[0] = Math.max(0, b.amount); p[1] = b.motion ? 1 : 0; p[2] = ((b.angle ?? 0) * Math.PI) / 180; p[3] = b.depth ? 1 : 0; break; }
       case "brightContrast": { const b = l.params as LayerParams["brightContrast"]; p[0] = b.brightness; p[1] = b.contrast; break; }
       case "exposure": { const e = l.params as LayerParams["exposure"]; p[0] = e.exposure; p[1] = e.offset; p[2] = e.gamma; break; }
       case "basic": {

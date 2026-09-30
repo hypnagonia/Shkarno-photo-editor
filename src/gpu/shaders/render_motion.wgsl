@@ -1,12 +1,13 @@
 // Motion blur (Blur layers set to Motion): each pixel averages the image along its
-// layer's direction over a streak of its layer's length, in linear light (a bright
+// layer's direction (by depth: away from the vanishing point) over a streak of its
+// layer's length, in linear light (a bright
 // light streaks as light, not as grey). Taps are weighted by how much they themselves
 // are blurred: a sharp subject does not smear into the streaked background around it,
 // as when the camera pans with it.
 
 struct U {
   size: vec4<u32>, // W, H of this texture, input is linear, _
-  m: vec4<f32>,    // streak length at amount 1 (output px), _, _, _
+  m: vec4<f32>,    // streak length at amount 1 (output px), vanishing point (px of this texture)
 }
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var src: texture_2d<f32>;
@@ -30,7 +31,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let dims = vec2<f32>(f32(u.size.x), f32(u.size.y));
   let lim = vec2<i32>(i32(u.size.x) - 1, i32(u.size.y) - 1);
   // (Screen y points down: a positive angle streaks up and to the right, as on a compass.)
-  let d = vec2<f32>(cos(mv.y), -sin(mv.y));
+  var d = vec2<f32>(cos(mv.y), -sin(mv.y));
+  // Angle 100: by depth — along the ray from the vanishing point (perspective).
+  if (mv.y > 50.0) {
+    let r = vec2<f32>(px) + 0.5 - u.m.yz;
+    d = select(vec2<f32>(1.0, 0.0), r / max(length(r), 1e-3), length(r) > 1.0);
+  }
   let n = i32(clamp(ceil(len / 1.5), 4.0, 48.0));
   var acc = vec3<f32>(0.0); var ws = 0.0;
   for (var k = 0; k <= n; k++) {

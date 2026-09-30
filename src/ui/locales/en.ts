@@ -72,6 +72,8 @@ export const en = {
   "blurl.motion": "Motion",
   "blurl.angle": "Direction",
   "blurl.motionHint": "Streaks what the mask covers along the direction (0° = horizontal), as a moving subject or a panned camera: Pick the subject in Mask and Invert — the background streaks, the subject stays sharp.",
+  "blurl.depth": "Into the depth",
+  "blurl.depthNote": "streaks run toward where the scene recedes, near things streak most",
   "grad.presets": "Palettes",
   "grad.gradient": "Gradient",
   "grad.reverse": "Reverse",

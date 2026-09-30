@@ -238,6 +238,8 @@ export class Renderer {
   // ------------------------------------------------------------------ targets
   /** Render targets are reused across renders (no per-frame allocation churn). */
   private targets = new Map<string, GPUTexture>();
+  /** Where the photo recedes to (0…1), for motion blur by depth (set by the engine per photo). */
+  vanishing: [number, number] = [0.5, 0.5];
   /** Cached by name, format *and* size, so preview, draft and thumbnail renders
    * (different sizes) don't reallocate each other's targets. Oldest entries are
    * evicted beyond a small budget. */
@@ -363,12 +365,12 @@ export class Renderer {
     const depthDof = dofOn && p.dof.strength > 0;
     const blurR = ((o.debugView ?? 0) < 7 || o.debugView === 11) && hasBlurLayers(p.layers ?? [], p.autoCurves ?? 1, p.enable) ? 0.03 * Math.max(W, H) : 0;
     const dof = depthDof || blurR > 0;
-    // Motion Blur layers: a streak of 6 % of the long side at amount 1.
+    // Motion Blur layers: a streak of 6 % of the long side at amount 1 (up to 1.6× with parallax).
     const motionR = ((o.debugView ?? 0) < 7 || o.debugView === 11) && hasMotionLayers(p.layers ?? [], p.autoCurves ?? 1, p.enable) ? 0.06 * Math.max(W, H) : 0;
     const maxRadius = depthDof ? p.dof.strength * 0.022 * Math.max(W, H) : 0;
     const y0 = strip?.y0 ?? 0, rows = strip?.rows ?? H;
     const ceqOn = contrastEqActive(p.contrastEq) && (o.debugView ?? 0) < 7;
-    const apron = strip ? Math.max(dof ? Math.ceil(Math.max(maxRadius, blurR)) + 4 : 3, ceqOn ? stripApron(W / src.fullWidth) : 0, motionR > 0 ? Math.ceil(motionR / 2) + 4 : 0) : 0;
+    const apron = strip ? Math.max(dof ? Math.ceil(Math.max(maxRadius, blurR)) + 4 : 3, ceqOn ? stripApron(W / src.fullWidth) : 0, motionR > 0 ? Math.ceil(motionR * 0.8) + 4 : 0) : 0;
     // Strip starts are aligned to 64 rows so the depth-of-field mip grid (up to
     // 2^5-row texels) lines up with the full-image grid: no seams between strips.
     // Heights are rounded up to 64 rows too (mip level sizes round down, so an
@@ -404,7 +406,7 @@ export class Renderer {
     if (motionT) {
       const out = final === t1 ? t2 : t1;
       await gpu.run("render.motion", (enc, temp) => {
-        const u = gpu.uniform(new Uniforms(8).u32(W, th, finalLinear ? 1 : 0, 0).f32(motionR, 0, 0, 0).bytes(), "motion.u");
+        const u = gpu.uniform(new Uniforms(8).u32(W, th, finalLinear ? 1 : 0, 0).f32(motionR, this.vanishing[0] * W, this.vanishing[1] * H - ty0, 0).bytes(), "motion.u");
         temp.push(u);
         gpu.dispatch(enc, gpu.pipeline("render.motion", motionWgsl), [u, final.createView(), motionT.createView(), this.sampler, out.createView()], Math.ceil(W / 8), Math.ceil(th / 8));
       });

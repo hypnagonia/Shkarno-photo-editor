@@ -67,6 +67,8 @@ export const zh: Dict = {
   "blurl.motion": "动感",
   "blurl.angle": "方向",
   "blurl.motionHint": "沿所选方向（0° 为水平）拖影蒙版覆盖的部分，如运动的主体或追拍：在蒙版中选取主体并反转——背景拖影，主体保持清晰。",
+  "blurl.depth": "纵深",
+  "blurl.depthNote": "拖影汇向场景深处的消失点，近处拖影最强",
   "grad.presets": "调色板",
   "grad.gradient": "渐变",
   "grad.reverse": "反向",

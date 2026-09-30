@@ -243,6 +243,12 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     show();
     return el("div", { class: "row" }, lab, input, dial);
   }
+  function toggleRow(label: string, note: string, get: () => boolean, set: (v: boolean) => void): HTMLElement {
+    const box = el("input", { type: "checkbox" });
+    box.checked = get();
+    box.onchange = () => { set(box.checked); edit(); };
+    return el("label", { class: "toggle" }, el("span", {}, label + " ", el("span", { class: "muted", text: note })), box);
+  }
   const pct = (v: number) => `${v > 0 ? "+" : ""}${Math.round(v * 100)}`;
   const deg = (v: number) => `${v > 0 ? "+" : ""}${Math.round(v)}°`;
   const ev = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(2)}`;
@@ -314,7 +320,8 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
         const b = l.params as LayerParams["blur"];
         return [chips([{ id: "lens", label: t("blurl.lens") }, { id: "motion", label: t("blurl.motion") }] as const, b.motion ? "motion" : "lens", (v) => { b.motion = v === "motion"; edit(); renderProps(); }),
           slider(t("blurl.amount"), 0, 1, 0.01, () => b.amount, (v) => (b.amount = v), (v) => `${Math.round(v * 100)}%`, 0.4),
-          ...(b.motion ? [angleRow(t("blurl.angle"), () => b.angle ?? 0, (v) => (b.angle = v))] : []),
+          ...(b.motion ? [toggleRow(t("blurl.depth"), t("blurl.depthNote"), () => !!b.depth, (v) => { b.depth = v; renderProps(); }),
+            ...(b.depth ? [] : [angleRow(t("blurl.angle"), () => b.angle ?? 0, (v) => (b.angle = v))])] : []),
           el("p", { class: "muted", text: t(b.motion ? "blurl.motionHint" : "blurl.hint") })];
       }
       case "brightContrast": {

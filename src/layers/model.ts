@@ -128,8 +128,11 @@ export interface LayerParams {
    * sharper things keep clean edges; `amount` 1 = a radius of 3 % of the picture's long
    * side. Motion: streaks along `angle` (degrees, 0 = horizontal, 90 = vertical), as a
    * moving subject or a panned camera; `amount` 1 = a streak of 6 % of the long side.
+   * `depth`: into the depth — streaks run away from the vanishing point (the centre of
+   * the farthest depth), scaled by nearness (near things up to 1.6×, the far distance
+   * hardly at all), as when moving into the scene; `angle` is then unused.
    */
-  blur: { amount: number; motion?: boolean; angle?: number };
+  blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean };
 }
 
 export interface Layer<T extends LayerType = LayerType> {

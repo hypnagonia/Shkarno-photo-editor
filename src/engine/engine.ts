@@ -1103,6 +1103,7 @@ export class Engine {
     const d = new Float32Array(m.w * m.h);
     for (let i = 0; i < d.length; i++) d[i] = raw[i * 4 + 3];
     s.distCPU = { w: m.w, h: m.h, data: d };
+    this.renderer.vanishing = vanishingPoint(s.distCPU);
   }
 
   focusAt(x: number, y: number): number | undefined {
@@ -1739,3 +1740,17 @@ function exposureGain(rgba: Float32Array): number {
 
 /** The Check's fixes were being worked out for settings (or a photo) that changed since. */
 class StaleCheck extends Error {}
+
+/**
+ * Where the photo recedes to (0…1 of width and height): the centre of its farthest 5 %
+ * (motion blur "by depth" streaks away from it, as when moving into the scene).
+ */
+export function vanishingPoint(d: { w: number; h: number; data: Float32Array }): [number, number] {
+  const sorted = Float32Array.from(d.data).sort();
+  const cut = sorted[Math.floor(sorted.length * 0.95)] ?? 1;
+  let sx = 0, sy = 0, n = 0;
+  for (let y = 0; y < d.h; y++) for (let x = 0; x < d.w; x++) {
+    if (d.data[y * d.w + x] >= cut) { sx += x + 0.5; sy += y + 0.5; n++; }
+  }
+  return n ? [sx / n / d.w, sy / n / d.h] : [0.5, 0.5];
+}

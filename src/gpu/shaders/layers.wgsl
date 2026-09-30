@@ -378,7 +378,14 @@ fn apply_layers(e0: vec3<f32>, g: array<f32, 12>, dist: f32, skin_w: f32, uv: ve
     if (w < 2e-3) { continue; }
     // Blur: no colour change here; the blur pass does it, by this amount.
     if (u32(L.a.x) == 7u) {
-      if (L.p0.y > 0.5) { if (w * L.p0.x > lay_motion.x) { lay_motion = vec2<f32>(w * L.p0.x, L.p0.z); } }
+      if (L.p0.y > 0.5) {
+        // By depth (p0.w): moving into the scene — the streak by nearness (1.6× at the front,
+        // 0.1× in the far distance), its direction away from the vanishing point (angle 100:
+        // the motion pass works it out per pixel).
+        let deep = L.p0.w > 0.5;
+        let m = w * L.p0.x * select(1.0, mix(1.6, 0.1, clamp(lay_dist, 0.0, 1.0)), deep);
+        if (m > lay_motion.x) { lay_motion = vec2<f32>(m, select(L.p0.z, 100.0, deep)); }
+      }
       else { lay_blur = max(lay_blur, w * L.p0.x); }
       continue;
     }
