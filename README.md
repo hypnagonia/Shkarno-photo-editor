@@ -7,7 +7,7 @@ iPhone ProRAW · DNG · HEIC · JPEG — edited on your device, never uploaded.
 
 [**Open Shkarno →**](https://img.jenyadoesapps.com/)
 
-[![CI](https://github.com/hypnagonia/image2image/actions/workflows/ci.yml/badge.svg)](https://github.com/hypnagonia/image2image/actions/workflows/ci.yml)
+[![CI](https://github.com/hypnagonia/Shkarno-photo-editor/actions/workflows/ci.yml/badge.svg)](https://github.com/hypnagonia/Shkarno-photo-editor/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 </div>

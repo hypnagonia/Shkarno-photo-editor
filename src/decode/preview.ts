@@ -60,13 +60,40 @@ export const HI_QS = [0.75, 0.9, 0.98, 0.995];
 
 /** Display-encoded luminance quantiles of rendered 8-bit P3 pixels (rgba), subsampled. */
 export function renderedQuantiles(px: Uint8Array, qs: number[] = REF_QS, stride = 7): number[] {
-  const ys: number[] = [];
+  const { h, n } = lumaHist(px, stride);
+  return histQuantiles(h, n, qs);
+}
+
+// Quantiles by histogram, not by sorting: the calibration reads them from every final
+// preview while a photo opens, and sorting millions of samples (each through two pow()s)
+// was a third of the engine's JavaScript time. 8-bit values go through a table; the
+// histogram is fine in √Y (4096 bins: under 0.1/255 from the exact value, shadows too).
+/** 8-bit display-encoded → linear, by table. */
+const EOTF8 = Float32Array.from({ length: 256 }, (_, i) => eotf(i / 255));
+const QBINS = 4096;
+
+/** Histogram of the Display P3 luminance of every `stride`-th RGBA pixel, in √Y bins. */
+function lumaHist(px: Uint8Array, stride: number): { h: Uint32Array; n: number } {
+  const h = new Uint32Array(QBINS);
+  let n = 0;
   for (let k = 0; k < px.length; k += 4 * stride) {
-    const Y = 0.229 * eotf(px[k] / 255) + 0.6917 * eotf(px[k + 1] / 255) + 0.0793 * eotf(px[k + 2] / 255);
-    ys.push(oetf(Y));
+    const Y = 0.229 * EOTF8[px[k]] + 0.6917 * EOTF8[px[k + 1]] + 0.0793 * EOTF8[px[k + 2]];
+    h[Math.min(QBINS - 1, (Math.sqrt(Math.max(0, Y)) * QBINS) | 0)]++;
+    n++;
   }
-  ys.sort((a, b) => a - b);
-  return qs.map((q) => (ys.length ? ys[Math.min(ys.length - 1, Math.floor(q * ys.length))] : 0));
+  return { h, n };
+}
+
+/** Display-encoded quantiles (as sorted samples would give: the value at index ⌊q·n⌋) from a √Y histogram. */
+function histQuantiles(h: Uint32Array, n: number, qs: number[]): number[] {
+  return qs.map((q) => {
+    if (!n) return 0;
+    const target = Math.min(n - 1, Math.floor(q * n));
+    let acc = 0, b = 0;
+    for (; b < QBINS - 1; b++) { acc += h[b]; if (acc > target) break; }
+    const s = (b + 0.5) / QBINS;
+    return oetf(s * s);
+  });
 }
 
 /**
@@ -134,18 +161,26 @@ export function renderedChroma(px: Uint8Array, stride = 7): number { return chro
 
 /** Mean and 95th percentile of the mid-tones' OkLab chroma (see renderedChroma). */
 export function chromaStats(px: Uint8Array, stride = 7): { mean: number; p95: number } {
-  const cs: number[] = [];
+  // (p95 by histogram: chroma 0 … 0.4 in 4096 bins, 1e-4 apart.)
+  const CMAX = 0.4, hist = new Uint32Array(QBINS);
   let sum = 0, n = 0;
   for (let k = 0; k < px.length; k += 4 * stride) {
-    const r = eotf(px[k] / 255), g = eotf(px[k + 1] / 255), b = eotf(px[k + 2] / 255);
+    const r = EOTF8[px[k]], g = EOTF8[px[k + 1]], b = EOTF8[px[k + 2]];
     // Linear P3 → linear sRGB primaries (OkLab's input), then OkLab.
     const lab = linSrgbToOklab([1.2249401 * r - 0.2249404 * g, -0.0420569 * r + 1.0420571 * g, -0.0196376 * r - 0.0786361 * g + 1.0982735 * b]);
     if (lab[0] < 0.25 || lab[0] > 0.92) continue;
     const c = Math.hypot(lab[1], lab[2]);
-    sum += c; n++; cs.push(c);
+    sum += c; n++;
+    hist[Math.min(QBINS - 1, ((c / CMAX) * QBINS) | 0)]++;
   }
-  cs.sort((a, b) => a - b);
-  return { mean: n ? sum / n : 0, p95: cs.length ? cs[Math.floor(cs.length * 0.95)] : 0 };
+  let p95 = 0;
+  if (n) {
+    const target = Math.floor(n * 0.95);
+    let acc = 0, b = 0;
+    for (; b < QBINS - 1; b++) { acc += hist[b]; if (acc > target) break; }
+    p95 = ((b + 0.5) / QBINS) * CMAX;
+  }
+  return { mean: n ? sum / n : 0, p95 };
 }
 
 /**
@@ -208,12 +243,7 @@ export async function embeddedPreviewStats(file: Blob, qs: number[], maxMP = Inf
   const img = await embeddedPreviewPixels(file, 256, maxMP);
   if (!img) return undefined;
   const px = img.rgba;
-  const ys: number[] = [];
-  for (let k = 0; k < px.length; k += 4) {
-    // Display P3 luminance (Apple's previews are P3); encoded like our own display levels.
-    const Y = 0.229 * eotf(px[k] / 255) + 0.6917 * eotf(px[k + 1] / 255) + 0.0793 * eotf(px[k + 2] / 255);
-    ys.push(oetf(Y));
-  }
-  ys.sort((a, b) => a - b);
-  return { width: img.w, height: img.h, q: qs.map((q) => ys[Math.min(ys.length - 1, Math.floor(q * ys.length))]), qHi: HI_QS.map((q) => ys[Math.min(ys.length - 1, Math.floor(q * ys.length))]), ...(() => { const c = chromaStats(px, 1); return { chroma: c.mean, chroma95: c.p95 }; })() };
+  // Display P3 luminance (Apple's previews are P3); encoded like our own display levels.
+  const { h, n } = lumaHist(px, 1);
+  return { width: img.w, height: img.h, q: histQuantiles(h, n, qs), qHi: histQuantiles(h, n, HI_QS), ...(() => { const c = chromaStats(px, 1); return { chroma: c.mean, chroma95: c.p95 }; })() };
 }
