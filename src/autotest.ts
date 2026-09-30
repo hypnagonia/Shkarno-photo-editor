@@ -55,8 +55,12 @@ export async function runAutotest(app: AutotestApp) {
   /** Chrome's own account of JS + WebAssembly memory, by worker (where the browser has it; ?jsmem). */
   const jsMem = async (): Promise<Record<string, number>> => {
     const pm = performance as Performance & { measureUserAgentSpecificMemory?: () => Promise<{ breakdown: Array<{ bytes: number; types: string[]; attribution: Array<{ url?: string; scope?: string }> }> }> };
-    // Only when asked (?jsmem; memcheck always asks): the browser answers after a full GC —
-    // up to ~20 s a call — and memcheck's page limits assume that collection.
+    // ?gc (memcheck): a full collection now, in the page and the engine's worker — Chrome
+    // started with --js-flags=--expose-gc; memcheck's page limits assume it. ?jsmem: also
+    // the breakdown by worker, which waits for the browser's own full GC (up to ~20 s a call).
+    // (Then a moment for the browser to hand back what was freed — WebAssembly and GPU
+    // buffers go back lazily; without it the next step starts on the last one's leftovers.)
+    if (q.has("gc")) { app.send({ type: "gc" }); (globalThis as { gc?: () => void }).gc?.(); await new Promise((r) => setTimeout(r, Number(q.get("gcWait") ?? 3000))); }
     if (!q.has("jsmem") || !pm.measureUserAgentSpecificMemory) return {};
     try {
       const r = await pm.measureUserAgentSpecificMemory();
@@ -250,7 +254,7 @@ export async function runAutotest(app: AutotestApp) {
         // ?region=vehicle: a region of the segmentation instead of a tapped object.
         const rg = q.get("region");
         const at = rg ? { kind: "region" as const, region: rg as "vehicle", invert: false, feather: 1, density: 1 } : pk.length === 2 && pk.every(Number.isFinite) ? { ...center, points: pts.map((p) => [p[0], p[1], 1]) as Array<[number, number, 0 | 1]> } : center;
-        await addLayer("motion", makeLayer("blur", "Autotest motion", { mask: { ...at, invert: !q.has("keep") }, params: { amount: Number(q.get("amount") ?? 0.6), motion: true, angle: Number(q.get("angle") ?? 0), depth: q.has("parallax"), through: q.has("through") } }));
+        await addLayer("motion", makeLayer("blur", "Autotest motion", { mask: { ...at, invert: !q.has("keep") }, params: { amount: Number(q.get("amount") ?? 0.6), motion: true, angle: Number(q.get("angle") ?? 0), depth: q.has("parallax"), through: q.has("through"), object: q.has("object"), trail: Number(q.get("trail") ?? 0.6), sharp: Number(q.get("sharp") ?? 0) } }));
         if (q.has("save")) await saveExport("motion");
       }
       else if (s === "export") {

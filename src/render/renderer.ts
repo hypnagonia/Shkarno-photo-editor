@@ -15,7 +15,7 @@ import layersWgsl from "../gpu/shaders/layers.wgsl?raw";
 import { TONE_EQ_DETAIL, toneEqActive, toneEqLut } from "../tone/toneEq.ts";
 import { contrastEqActive, edgeSigma, levels, stripApron, type ContrastEq } from "../tone/contrastEq.ts";
 import ceqWgsl from "../gpu/shaders/render_ceq.wgsl?raw";
-import { ATLAS_W, hasBlurLayers, hasMotionLayers, packLayers, RECORD } from "../layers/gpu.ts";
+import { ATLAS_W, hasBlurLayers, hasMotionLayers, objectMotionLayer, packLayers, RECORD } from "../layers/gpu.ts";
 import type { MaskShape } from "../layers/model.ts";
 import detailWgsl from "../gpu/shaders/render_detail.wgsl?raw";
 import dofWgsl from "../gpu/shaders/render_dof.wgsl?raw";
@@ -23,6 +23,7 @@ import outputWgsl from "../gpu/shaders/output.wgsl?raw";
 import grainWgsl from "../gpu/shaders/render_grain.wgsl?raw";
 import filmWgsl from "../gpu/shaders/render_film.wgsl?raw";
 import motionWgsl from "../gpu/shaders/render_motion.wgsl?raw";
+import motionObjectWgsl from "../gpu/shaders/render_motion_object.wgsl?raw";
 import filmGlowWgsl from "../gpu/shaders/film_glow.wgsl?raw";
 import { filmOf, filmUniforms } from "../film/film.ts";
 import gainmapWgsl from "../gpu/shaders/render_gainmap.wgsl?raw";
@@ -238,6 +239,8 @@ export class Renderer {
   // ------------------------------------------------------------------ targets
   /** Render targets are reused across renders (no per-frame allocation churn). */
   private targets = new Map<string, GPUTexture>();
+  /** A moving object's background plate: inpainted where the object was (display P3), over `rect` (0…1). Set by the engine. */
+  motionPlate?: { tex: GPUTexture; rect: [number, number, number, number] };
   /** Where the photo recedes to (0…1), for motion blur by depth (set by the engine per photo). */
   vanishing: [number, number] = [0.5, 0.5];
   /** Cached by name, format *and* size, so preview, draft and thumbnail renders
@@ -369,10 +372,13 @@ export class Renderer {
     const motionR = ((o.debugView ?? 0) < 7 || o.debugView === 11) && hasMotionLayers(p.layers ?? [], p.autoCurves ?? 1, p.enable) ? 0.06 * Math.max(W, H) : 0;
     // The longest streak (strongest layer, nearest pixel: 1.6×) sets the strips' apron.
     const motionMax = motionR * 1.6 * Math.max(0, ...(p.layers ?? []).filter((l) => l.type === "blur" && (l.params as { motion?: boolean }).motion).map((l) => (l.params as { amount: number }).amount));
+    // A moving object (Motion Blur set to Object): its streak, the same 6 % at amount 1, one way at most.
+    const obj = ((o.debugView ?? 0) < 7 || o.debugView === 11) ? objectMotionLayer(p.layers ?? [], p.autoCurves ?? 1, p.enable) : undefined;
+    const objL = obj ? obj.layer.params.amount * 0.06 * Math.max(W, H) : 0;
     const maxRadius = depthDof ? p.dof.strength * 0.022 * Math.max(W, H) : 0;
     const y0 = strip?.y0 ?? 0, rows = strip?.rows ?? H;
     const ceqOn = contrastEqActive(p.contrastEq) && (o.debugView ?? 0) < 7;
-    const apron = strip ? Math.max(dof ? Math.ceil(Math.max(maxRadius, blurR)) + 4 : 3, ceqOn ? stripApron(W / src.fullWidth) : 0, motionR > 0 ? Math.ceil(motionMax / 2) + 4 : 0) : 0;
+    const apron = strip ? Math.max(dof ? Math.ceil(Math.max(maxRadius, blurR)) + 4 : 3, ceqOn ? stripApron(W / src.fullWidth) : 0, motionR > 0 ? Math.ceil(motionMax / 2) + 4 : 0, objL > 0 ? Math.ceil(objL) + 4 : 0) : 0;
     // Strip starts are aligned to 64 rows so the depth-of-field mip grid (up to
     // 2^5-row texels) lines up with the full-image grid: no seams between strips.
     // Heights are rounded up to 64 rows too (mip level sizes round down, so an
@@ -386,7 +392,7 @@ export class Renderer {
     const t2 = this.target("detail", W, th, "rgba16float");
     const gainT = hdrStops > 0 ? this.target("gain", W, th, "r32float") : undefined;
     const distT = dof ? this.target("dist", W, th, "r32float") : this.target("distDummy", 1, 1, "r32float");
-    const motionT = motionR > 0 ? this.target("motion", W, th, "rgba16float") : undefined;
+    const motionT = motionR > 0 || objL > 0 ? this.target("motion", W, th, "rgba16float") : undefined;
     const scale = W / src.fullWidth;
     await gpu.run("render.tone+detail", (enc, temp) => {
       this.toneDispatch(enc, temp, src, maps, p, o, lutSize, !identity, p.enable.lut && !isNeutral(p.profile), t1, distT, ty0, th, gainT, motionT);
@@ -405,7 +411,7 @@ export class Renderer {
       final = await this.depthOfField(t2, t1, distT, W, th, p, maxRadius, dofLevels, blurR, depthDof);
       finalLinear = true;
     }
-    if (motionT) {
+    if (motionT && motionR > 0) {
       // Two passes, back into the texture the image came from (it is free after the first).
       const out = final === t1 ? t2 : t1, back = final;
       await gpu.run("render.motion", (enc, temp) => {
@@ -415,6 +421,28 @@ export class Renderer {
           gpu.dispatch(enc, gpu.pipeline("render.motion", motionWgsl), [u, from.createView(), motionT.createView(), this.sampler, to.createView()], Math.ceil(W / 8), Math.ceil(th / 8));
         }
       });
+    }
+    if (motionT && obj && objL > 0) {
+      // The moving object smeared over its background (render_motion_object.wgsl): two
+      // smear passes into scratch targets, then the composite into the free image target.
+      const b = obj.layer.params;
+      const ang = ((b.angle ?? 0) * Math.PI) / 180, trail = Math.min(1, Math.max(0, b.trail ?? 0.6));
+      const pl = this.motionPlate;
+      const rect = pl ? [pl.rect[0] * W, pl.rect[1] * H - ty0, pl.rect[2] * W, pl.rect[3] * H - ty0] : [0, 0, 0, 0];
+      const accA = this.target("objA", W, th, "rgba16float"), accB = this.target("objB", W, th, "rgba16float");
+      const out = final === t1 ? t2 : t1;
+      const plateTex = pl?.tex ?? this.target("plateDummy", 1, 1, "rgba8unorm");
+      const uni = (pass: number) => new Uniforms(16).u32(W, th, finalLinear ? 1 : 0, pass)
+        .f32(Math.cos(ang), -Math.sin(ang), (-0.5 + 0.5 * trail) * objL, (0.5 + 0.5 * trail) * objL).f32(...rect).f32(b.sharp ?? 0, 0, 0, 0).bytes();
+      await gpu.run("render.motionObject", (enc, temp) => {
+        const u0 = gpu.uniform(uni(0), "motionObj.u"), u1 = gpu.uniform(uni(1), "motionObj.u");
+        temp.push(u0, u1);
+        const smear = gpu.pipeline("render.motionObject.smear", motionObjectWgsl, "smear");
+        gpu.dispatch(enc, smear, [u0, final.createView(), motionT.createView(), accB.createView(), undefined, this.sampler, accA.createView()], Math.ceil(W / 8), Math.ceil(th / 8));
+        gpu.dispatch(enc, smear, [u1, final.createView(), motionT.createView(), accA.createView(), undefined, this.sampler, accB.createView()], Math.ceil(W / 8), Math.ceil(th / 8));
+        gpu.dispatch(enc, gpu.pipeline("render.motionObject.composite", motionObjectWgsl, "composite"), [u0, final.createView(), motionT.createView(), accB.createView(), plateTex.createView(), this.sampler, out.createView()], Math.ceil(W / 8), Math.ceil(th / 8));
+      });
+      final = out;
     }
     const film = filmOf(p);
     const fu = film && o.debugView !== 1 && o.debugView !== 2 && (o.debugView ?? 0) < 7 ? filmUniforms(film, Math.max(src.fullWidth, (H / scale))) : undefined;

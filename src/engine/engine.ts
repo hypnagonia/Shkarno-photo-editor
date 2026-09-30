@@ -54,6 +54,7 @@ import type { CheckItem, CheckInput } from "../analysis/check.ts";
 import type { FixChange } from "../analysis/checkFix.ts";
 import { type Post, type Session, type Selections, isMobile } from "./session.ts";
 import { calibrateToCamera } from "./calibration.ts";
+import { dropMotionPlate, ensureMotionPlate } from "./objectMotion.ts";
 import * as openMod from "./open.ts";
 import * as upscaleMod from "./upscale.ts";
 import * as exportMod from "./export.ts";
@@ -209,6 +210,7 @@ export class Engine {
     g.release(s.work.tex, s.skin);
     if (s.sel) { s.sel.sam.dispose(); g.release(s.sel.tex); this.renderer.selection = undefined; }
     s.retouch?.painter?.dispose();
+    dropMotionPlate(this, s);
     this.releaseProxy(s);
     releaseRefined(g, s.maps);
     this.renderer.releaseTargets();
@@ -320,6 +322,7 @@ export class Engine {
     const t0 = performance.now();
     const p = this.effectiveParams();
     await this.ensureSelections(s, p);
+    await ensureMotionPlate(this, s, p);
     const src = draft && s.proxy ? await this.draftSource() : this.renderSource(false);
     if (s.draft) this.scheduleDraftRelease(s);
     const dof = p.enable.dof && p.dof.strength > 0;

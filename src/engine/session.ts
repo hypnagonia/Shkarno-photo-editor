@@ -71,6 +71,8 @@ export interface Session {
    * puts them back exactly — and the network that fills them.
    */
   retouch?: { applied: Array<{ key: string; rect: Rect; before: Uint16Array[] }>; failed?: string; painter?: Inpainter };
+  /** A moving object's background plate (objectMotion.ts): for which mask, and the texture the renderer reads. */
+  motionPlate?: { key: string; tex?: GPUTexture };
 }
 
 export interface Selections {

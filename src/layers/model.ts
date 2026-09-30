@@ -141,8 +141,12 @@ export interface LayerParams {
    * deep end — the flow of a forward motion, ∝ r / Z — at `falloff` −1; 0 the same
    * streak all along; +1 the deep end streaked most (a zoom burst, the part dissolving
    * into the depth). Absent: +0.5.
+   * `object`: the mask is a moving object (a vehicle, a horse, a runner), not the scene —
+   * it is smeared along `angle` (its travel direction) past its own outline over the
+   * background, which the engine inpaints where the object was; `trail` 0 (streaked
+   * both ways) … 1 (all behind it), `sharp` 0…1 the object itself sharp on top.
    */
-  blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean; through?: boolean; vanish?: [number, number]; range?: [number, number]; reach?: number; falloff?: number };
+  blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean; through?: boolean; vanish?: [number, number]; range?: [number, number]; reach?: number; falloff?: number; object?: boolean; trail?: number; sharp?: number };
   /**
    * Fog: air thickening with distance (the depth map) — from `start` (0 = the nearest,
    * 1 = the farthest) on, toward `color` (hex), by the real distance through the air

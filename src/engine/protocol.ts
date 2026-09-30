@@ -81,6 +81,8 @@ export type ToWorker =
   | { type: "mem" }
   /** Where the light probably is (a lens flare's default position). */
   | { type: "brightest" }
+  /** A full garbage collection now (tests: Chrome with --js-flags=--expose-gc). */
+  | { type: "gc" }
   /** The depth map, coarse, and where the photo recedes to (motion blur's arrows on the photo). */
   | { type: "depthField" }
   /** A layer's mask (live index) on the coarse depth grid, and where the part it covers recedes to. */

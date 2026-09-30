@@ -91,7 +91,7 @@ struct Prof {
 // HDR: linear luminance gain of the HDR rendition over the SDR one (curves.ts
 // hdrGain), per pixel; a 1×1 dummy when HDR is off (out-of-bounds stores are discarded).
 @group(0) @binding(20) var gain_out: texture_storage_2d<r32float, write>;
-// Motion Blur layers at this pixel (amount, angle, mix): read by the motion pass (1×1 when there are none).
+// Motion Blur layers at this pixel (amount, angle, mix; a moving object's mask): read by the motion passes (1×1 when there are none).
 @group(0) @binding(23) var motion_out: texture_storage_2d<rgba16float, write>;
 
 const PI = 3.14159265;
@@ -862,5 +862,5 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     bd = mix(dist, u.hl.w, pw);
   }
   textureStore(dist_out, tp, vec4<f32>(bd + 2.0 * round(clamp(lay_blur, 0.0, 4.0) * 1000.0), 0.0, 0.0, 0.0));
-  textureStore(motion_out, tp, vec4<f32>(lay_motion, 0.0));
+  textureStore(motion_out, tp, vec4<f32>(lay_motion, lay_obj));
 }

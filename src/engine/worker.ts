@@ -124,6 +124,9 @@ async function handle(m: ToWorker) {
     case "mem":
       post({ type: "mem", ...engine.memStats() });
       break;
+    case "gc":
+      (globalThis as { gc?: () => void }).gc?.();
+      break;
     case "check": {
       const r = await engine.check();
       post({ type: "check", ...r }, [r.rgba.buffer, ...r.items.flatMap((i) => (i.mask ? [i.mask.buffer] : []))]);

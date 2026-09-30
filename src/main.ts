@@ -578,7 +578,7 @@ function renderMotionGuide() {
     const x0 = cx - (a.dx * L) / 2, y0 = cy - (a.dy * L) / 2, x1 = cx + (a.dx * L) / 2, y1 = cy + (a.dy * L) / 2;
     const h = Math.min(7, L * 0.35), px = -a.dy, py = a.dx;
     const head = (x: number, y: number, s: number) => `M${x - s * a.dx * h + px * h * 0.6} ${y - s * a.dy * h + py * h * 0.6}L${x} ${y}L${x - s * a.dx * h - px * h * 0.6} ${y - s * a.dy * h - py * h * 0.6}`;
-    d += `M${x0} ${y0}L${x1} ${y1}` + head(x1, y1, 1) + (b.depth ? "" : head(x0, y0, -1));
+    d += `M${x0} ${y0}L${x1} ${y1}` + head(x1, y1, 1) + (b.depth || b.object ? "" : head(x0, y0, -1));
   }
   for (const [cls, w] of [["shade", 3], ["line", 1.3]] as const) {
     const p = document.createElementNS(ns, "path");

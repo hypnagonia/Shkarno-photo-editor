@@ -51,6 +51,7 @@ export function motionArrows(b: LayerParams["blur"], depth: { w: number; h: numb
     }
     // Into the depth: ∝ r / Z within the part (as layers.wgsl).
     let len = b.amount * MOTION_STREAK;
+    if (b.object) { out.push({ x, y, dx, dy, len }); continue; } // (a moving object: one direction, one length)
     if (b.depth) {
       const rg = b.range ?? [0, 1];
       const rel = Math.min(1, Math.max(0, (d - rg[0]) / Math.max(rg[1] - rg[0], 0.05)));

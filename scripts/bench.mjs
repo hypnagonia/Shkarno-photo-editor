@@ -12,6 +12,7 @@
  *   npm run bench -- --save-baseline   … and make this run the baseline
  *   npm run bench -- --photo IMG_1847.DNG
  *   npm run bench -- --desktop         the desktop path instead of the phone's
+ *   npm run bench -- --jobs 1          one photo at a time (default 3 in parallel)
  *
  * Output: .samples/out/bench/ (report.json, sheet.jpg, per photo ours / ref JPEGs).
  */
@@ -113,15 +114,17 @@ await sleep(2500);
 const results = {};
 // --reuse: the app's renders and findings of the last run, only the comparison again.
 const last = flag("reuse") && existsSync(join(OUT, "report.json")) ? JSON.parse(readFileSync(join(OUT, "report.json"), "utf8")) : undefined;
-for (const photo of photos) {
+// Photos run a few at a time (--jobs, default 3), each in a browser of its own; their
+// report lines are told apart by the photo they name.
+rmSync(REPORT, { force: true });
+async function runPhoto(photo) {
   const tag = `bench-${photo.replace(/\.[^.]+$/, "")}`;
   if (last?.[photo] && !last[photo].failed && existsSync(join(OUT, `${tag}-ours.jpg`))) {
     execFileSync("cp", [join(OUT, `${tag}-ours.jpg`), join(".samples/out", `${tag}.jpg`)]);
     const L = last[photo];
     await score(photo, tag, L.checkItems ?? [...L.bad.map((id) => ({ id, level: "bad" })), ...L.warn.map((id) => ({ id, level: "warn" }))], "done");
-    continue;
+    return;
   }
-  rmSync(REPORT, { force: true });
   rmSync(join(".samples/out", `${tag}.jpg`), { force: true });
   const stop = chrome(`http://localhost:${port}/?autotest${flag("desktop") ? "" : "&phone"}&close&save&tag=${tag}&photo=${encodeURIComponent(`bench/${photo}`)}&steps=open,check,snap&run=${Date.now()}`);
   let check, done = "", t0 = Date.now();
@@ -129,7 +132,9 @@ for (const photo of photos) {
     await sleep(1000);
     if (!existsSync(REPORT)) continue;
     for (const l of readFileSync(REPORT, "utf8").trim().split("\n").filter(Boolean)) {
-      const r = JSON.parse(l);
+      let r;
+      try { r = JSON.parse(l); } catch { continue; } // (a line being written)
+      if (r.photo !== `bench/${photo}`) continue;
       if (r.stage === "check") check = r.items;
       if (r.stage === "done" || r.stage === "failed") done = r.stage + (r.message ? `: ${r.message}` : "");
     }
@@ -138,6 +143,8 @@ for (const photo of photos) {
   await stop();
   await score(photo, tag, check, done);
 }
+const queue = [...photos];
+await Promise.all(Array.from({ length: Math.max(1, Number(opt("jobs", 3))) }, async () => { while (queue.length) await runPhoto(queue.shift()); }));
 server.kill();
 
 async function score(photo, tag, check, done) {
@@ -160,6 +167,8 @@ async function score(photo, tag, check, done) {
 }
 
 // ------------------------------------------------------------------ report
+// (In photo order, whichever finished first.)
+for (const k of Object.keys(results).sort()) { const v = results[k]; delete results[k]; results[k] = v; }
 writeFileSync(join(OUT, "report.json"), JSON.stringify(results, null, 2));
 const ok = Object.entries(results).filter(([, r]) => !r.failed);
 const total = ok.reduce((a, [, r]) => a + r.score, 0);

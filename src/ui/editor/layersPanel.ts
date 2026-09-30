@@ -226,11 +226,14 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
    * A direction −90…90° (0 = horizontal, positive = up to the right): a slider, and a dial
    * whose two-headed arrow shows it (a streak runs both ways) — drag the dial to set it.
    */
-  function angleRow(label: string, get: () => number, set: (v: number) => void): HTMLElement {
-    const input = el("input", { type: "range", min: "-90", max: "90", step: "1" });
+  function angleRow(label: string, get: () => number, set: (v: number) => void, oneWay = false): HTMLElement {
+    // (One way: a travel direction, −180…180°, one arrowhead. Else a streak's axis, −90…90°.)
+    const lim = oneWay ? 180 : 90;
+    const input = el("input", { type: "range", min: String(-lim), max: String(lim), step: "1" });
     const lab = el("label", { text: label });
-    const dial = el("span", { class: "angle-dial", role: "slider", "aria-label": label, "aria-valuemin": "-90", "aria-valuemax": "90" });
-    dial.innerHTML = `<svg viewBox="-20 -20 40 40" aria-hidden="true"><circle r="18.8" fill="none" stroke="currentColor" stroke-opacity=".3" stroke-width=".8"/><g class="arrow"><path d="M-13 0H13M-13 0l4.5-4M-13 0l4.5 4M13 0l-4.5-4M13 0l-4.5 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></g></svg>`;
+    const dial = el("span", { class: "angle-dial", role: "slider", "aria-label": label, "aria-valuemin": String(-lim), "aria-valuemax": String(lim) });
+    const heads = oneWay ? "M13 0l-4.5-4M13 0l-4.5 4" : "M-13 0l4.5-4M-13 0l4.5 4M13 0l-4.5-4M13 0l-4.5 4";
+    dial.innerHTML = `<svg viewBox="-20 -20 40 40" aria-hidden="true"><circle r="18.8" fill="none" stroke="currentColor" stroke-opacity=".3" stroke-width=".8"/><g class="arrow"><path d="M-13 0H13${heads}" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></g></svg>`;
     const arrow = dial.querySelector<SVGGElement>(".arrow")!;
     const show = () => {
       const v = get();
@@ -245,7 +248,7 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     const fromPointer = (e: PointerEvent) => {
       const r = dial.getBoundingClientRect();
       let a = (Math.atan2(-(e.clientY - (r.top + r.height / 2)), e.clientX - (r.left + r.width / 2)) * 180) / Math.PI;
-      if (a > 90) a -= 180; else if (a < -90) a += 180;
+      if (!oneWay) { if (a > 90) a -= 180; else if (a < -90) a += 180; }
       set(Math.round(a)); show(); edit();
     };
     dial.addEventListener("pointerdown", (e) => { dial.setPointerCapture(e.pointerId); fromPointer(e); });
@@ -330,12 +333,18 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
         const b = l.params as LayerParams["blur"];
         return [chips([{ id: "lens", label: t("blurl.lens") }, { id: "motion", label: t("blurl.motion") }] as const, b.motion ? "motion" : "lens", (v) => { b.motion = v === "motion"; edit(); renderProps(); }),
           slider(t("blurl.amount"), 0, b.motion ? 3 : 1, 0.01, () => b.amount, (v) => { b.amount = v; ctx.motionGuide?.(b); }, (v) => `${Math.round(v * 100)}%`, 0.4),
-          ...(b.motion ? [toggleRow(t("blurl.depth"), t("blurl.depthNote"), () => !!b.depth, (v) => { b.depth = v; renderProps(); }),
+          ...(b.motion ? [chips([{ id: "scene", label: t("blurl.scene") }, { id: "object", label: t("blurl.object") }] as const, b.object ? "object" : "scene", (v) => { b.object = v === "object"; edit(); renderProps(); })] : []),
+          ...(b.motion && b.object ? [
+            angleRow(t("blurl.travel"), () => b.angle ?? 0, (v) => { b.angle = v; ctx.motionGuide?.(b); }, true),
+            slider(t("blurl.trail"), 0, 1, 0.01, () => b.trail ?? 0.6, (v) => (b.trail = v), (v) => `${Math.round(v * 100)}%`, 0.6),
+            slider(t("blurl.sharp"), 0, 1, 0.01, () => b.sharp ?? 0, (v) => (b.sharp = v), (v) => `${Math.round(v * 100)}%`, 0),
+          ] : []),
+          ...(b.motion && !b.object ? [toggleRow(t("blurl.depth"), t("blurl.depthNote"), () => !!b.depth, (v) => { b.depth = v; renderProps(); }),
             ...(b.depth ? [slider(t("blurl.falloff"), -1, 1, 0.01, () => b.falloff ?? DEFAULT_FALLOFF, (v) => { b.falloff = v; ctx.motionGuide?.(b); }, (v) => `${v > 0 ? "+" : ""}${Math.round(v * 100)}%`, DEFAULT_FALLOFF),
               el("p", { class: "muted", text: t("blurl.falloffNote") }),
               toggleRow(t("blurl.through"), t("blurl.throughNote"), () => !!b.through, (v) => (b.through = v))] : []),
             ...(b.depth ? [] : [angleRow(t("blurl.angle"), () => b.angle ?? 0, (v) => { b.angle = v; ctx.motionGuide?.(b); })])] : []),
-          el("p", { class: "muted", text: t(b.motion ? "blurl.motionHint" : "blurl.hint") })];
+          el("p", { class: "muted", text: t(b.motion ? (b.object ? "blurl.objectHint" : "blurl.motionHint") : "blurl.hint") })];
       }
       case "fog": {
         const f = l.params as LayerParams["fog"];

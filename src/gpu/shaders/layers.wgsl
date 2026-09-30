@@ -86,6 +86,8 @@ var<private> lay_dist: f32;
 var<private> lay_blur: f32 = 0.0;
 /** Motion Blur layers here: amount, angle (radians; 100 = into the depth), mix (1, or the mask when through it) of the strongest. */
 var<private> lay_motion: vec3<f32> = vec3<f32>(0.0, 0.0, 1.0);
+/** A moving object's mask here (Motion Blur set to Object): render_motion_object.wgsl smears it. */
+var<private> lay_obj: f32 = 0.0;
 /** OkLab of the colour before the layers, for colour masks (computed once, on first use). */
 var<private> lay_lab: vec3<f32>;
 var<private> lay_lab_ok: bool = false;
@@ -442,6 +444,7 @@ fn apply_layers(e0: vec3<f32>, g: array<f32, 12>, dist: f32, skin_w: f32, uv: ve
     if (w < 2e-3) { continue; }
     // Blur: no colour change here; the blur pass does it, by this amount.
     if (u32(L.a.x) == 7u) {
+      if (L.p0.y > 2.5) { lay_obj = max(lay_obj, w); continue; }
       if (L.p0.y > 0.5) {
         // Sideways: the streak by nearness, as seen from a moving camera (1.5× at the front,
         // 0.25× in the far distance). Into the depth (p0.w ≥ 1): the flow of a forward

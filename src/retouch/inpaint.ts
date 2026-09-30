@@ -7,7 +7,7 @@
  *     WebAssembly; a fixed 512² input (the region is resized to it and back), the hole
  *     zeroed in the image, output 0…255. The worker ends a minute after the last stroke.
  *   MI-GAN (phones; src/neural/inpaintWorker.ts): plain WebAssembly; uint8 CHW, 0 = hole,
- *     any size (sent at most 512 px: it works at 512 inside). Ends after 30 s.
+ *     any size (sent at most 512 px: it works at 512 inside). Ends after each fill.
  */
 import { resize } from "./geometry.ts";
 
@@ -78,7 +78,11 @@ export class WorkerInpainter implements Inpainter {
       wk.onerror = (e) => { clearTimeout(timer); this.dispose(); reject(new Error(e.message || "inpainting worker failed")); };
       wk.postMessage({ type: "run", id, base: this.base, ...msg }, transfer);
     });
-    this.idle = self.setTimeout(() => this.dispose(), lama ? 60_000 : 30_000);
+    // LaMa (computers) stays a minute for the next stroke. MI-GAN (phones) ends at once: its
+    // runtime holds ≈ 450 MB that never shrinks, and an export right after a stroke on top
+    // of it went past the page's memory budget; reloading it costs ≈ 0.5 s.
+    if (lama) this.idle = self.setTimeout(() => this.dispose(), 60_000);
+    else this.dispose();
     // (Both give 0…255: LaMa as floats, MI-GAN as bytes.)
     const hwc = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) hwc[i * 3 + c] = Math.min(1, Math.max(0, out[c * n + i] / 255));

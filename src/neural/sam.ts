@@ -9,6 +9,7 @@
  * so params stay small and the mask can be rebuilt after a reload.
  */
 import { samDims } from "../refine/selection.ts";
+import { isPhone } from "../device.ts";
 
 import type { SelectPoint } from "../layers/model.ts";
 export type { SelectPoint };
@@ -106,9 +107,13 @@ export class SamSelector {
       this.dispose(); // a worker that failed a decode (or was killed) is not reused
       throw e;
     } finally {
-      this.idle = setTimeout(() => this.dispose(), 30_000) as unknown as number;
+      // (On a phone after 5 s: another network — the magic brush's — may want the memory.)
+      this.idle = setTimeout(() => this.dispose(), this.phone || isPhone() ? 5_000 : 30_000) as unknown as number;
     }
   }
+
+  /** Its worker is running (holding its runtime's memory). */
+  get running(): boolean { return !!this.worker; }
 
   dispose() {
     clearTimeout(this.idle);

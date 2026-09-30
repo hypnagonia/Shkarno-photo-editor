@@ -141,7 +141,8 @@ export function packLayers(layers: Layer[], autoStrength = 1, enable?: { curves?
       }
       case "blur": { const b = l.params as LayerParams["blur"]; p[0] = Math.max(0, b.amount); p[1] = b.motion ? 1 : 0; p[2] = ((b.angle ?? 0) * Math.PI) / 180; const v = b.vanish ?? vanish, rg = b.range ?? [0, 1];
         // p0.y 0 lens, 1 motion, 2 motion through the mask; p0.w 0 sideways, else 1 + the part's near depth.
-        p[1] = b.motion ? (b.through ? 2 : 1) : 0; p[3] = b.depth ? 1 + Math.min(0.999, Math.max(0, rg[0])) : 0;
+        // (3: a moving object — layers.wgsl only marks its mask; render_motion_object.wgsl smears it.)
+        p[1] = b.motion ? (b.object ? 3 : b.through ? 2 : 1) : 0; p[3] = b.depth ? 1 + Math.min(0.999, Math.max(0, rg[0])) : 0;
         // (Into the depth the angle is unused: p0.z carries the falloff instead.)
         if (b.depth) p[2] = Math.min(1, Math.max(-1, b.falloff ?? DEFAULT_FALLOFF));
         p[4] = rg[1]; p[5] = v[0]; p[6] = v[1]; p[7] = b.reach ?? 0.6;
@@ -173,7 +174,13 @@ export function hasBlurLayers(layers: Layer[], autoStrength = 1, enable?: { curv
 }
 /** Whether any visible motion Blur layer blurs something (the renderer then runs the motion pass). */
 export function hasMotionLayers(layers: Layer[], autoStrength = 1, enable?: { curves?: boolean; semantic?: boolean }): boolean {
-  return liveLayers(layers, autoStrength, enable).some((l) => l.type === "blur" && (l.params as LayerParams["blur"]).amount > 0 && !!(l.params as LayerParams["blur"]).motion);
+  return liveLayers(layers, autoStrength, enable).some((l) => l.type === "blur" && (l.params as LayerParams["blur"]).amount > 0 && !!(l.params as LayerParams["blur"]).motion && !(l.params as LayerParams["blur"]).object);
+}
+/** The first visible Motion Blur layer set to Object (one moving object is smeared per photo), and its index among the live layers. */
+export function objectMotionLayer(layers: Layer[], autoStrength = 1, enable?: { curves?: boolean; semantic?: boolean }): { layer: Layer<"blur">; index: number } | undefined {
+  const live = liveLayers(layers, autoStrength, enable);
+  const index = live.findIndex((l) => l.type === "blur" && (l.params as LayerParams["blur"]).amount > 0 && !!(l.params as LayerParams["blur"]).motion && !!(l.params as LayerParams["blur"]).object);
+  return index >= 0 ? { layer: live[index] as Layer<"blur">, index } : undefined;
 }
 
 /** A hex colour (sRGB) as linear Display P3, the space the layers mix light in. */

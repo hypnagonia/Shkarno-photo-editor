@@ -61,7 +61,7 @@ function launch(url) {
     .map((a) => join(a, "Contents/MacOS", a.includes("Chromium") ? "Chromium" : "Google Chrome")).find(existsSync);
   if (!bin) { console.error("Chrome not found in /Applications"); process.exit(2); }
   const profile = mkdtempSync(join(tmpdir(), "memcheck-"));
-  const proc = spawn(bin, ["--headless=new", "--enable-unsafe-webgpu", "--enable-blink-features=ForceEagerMeasureMemory", "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`, url], { stdio: "ignore" });
+  const proc = spawn(bin, ["--headless=new", "--enable-unsafe-webgpu", "--enable-blink-features=ForceEagerMeasureMemory", "--js-flags=--expose-gc", "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`, url], { stdio: "ignore" });
   return {
     // Chrome's helpers do not carry the profile on their command line: they are this Chrome's children.
     page: () => children(proc.pid, "--type=renderer"),
@@ -89,7 +89,7 @@ for (const photo of photos) {
   if (!existsSync(`.samples/${photo}`)) { console.log(`skip ${photo}: not in .samples`); continue; }
   rmSync(REPORT, { force: true });
   const what = `photo=${encodeURIComponent(photo)}`;
-  const b = launch(`http://localhost:${port}/?autotest&phone&close&${what}&steps=${stepsFor(photo)}${flag("save") ? "&save" : ""}${opt("teq") ? `&teq=${opt("teq")}` : ""}${opt("ceq") ? `&ceq=${opt("ceq")}` : ""}${flag("logs") ? "&logs" : ""}&jsmem&run=${Date.now()}`);
+  const b = launch(`http://localhost:${port}/?autotest&phone&close&${what}&steps=${stepsFor(photo)}${flag("save") ? "&save" : ""}${opt("teq") ? `&teq=${opt("teq")}` : ""}${opt("ceq") ? `&ceq=${opt("ceq")}` : ""}${flag("logs") ? "&logs" : ""}${flag("timeline") ? "&jsmem" : "&gc"}&run=${Date.now()}`);
   console.log(`\n${photo} (${browser}): ${stepsFor(photo)}`);
   const peaks = new Map(); // step → { page, gpu, tracked }
   let stage = "load", sub = "", done = "", message = "", gpuBase = -1, seen = 0;

@@ -29,10 +29,12 @@ can save its export for inspection. The scripts below drive it.
 - `npm run bench` — **quality benchmark**: 19 iPhone photos opened as on a phone, each
   scored against the iPhone's own rendering of the same file (exposure, colour
   difference, colourfulness) and by the Check's findings, compared with a saved baseline.
-  Every change to the automatic development is measured with it.
+  Every change to the automatic development is measured with it. Three photos run at once
+  (`--jobs`): about 2 minutes.
 - `npm run memcheck` — **memory guard**: the phone code path on sample photos, step by
   step, against a memory budget (below). `npm run deploy` runs it and refuses to ship a
-  build that breaks the budget.
+  build that breaks the budget. Between steps it forces a garbage collection (Chrome with
+  `--expose-gc`) and gives the browser 3 s to hand memory back: about 2 minutes.
 
 **3. What is not automated**
 

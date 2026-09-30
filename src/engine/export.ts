@@ -1,5 +1,6 @@
 /** Export at full resolution, in strips (JPEG, Ultra HDR, HEIC, TIFF, linear DNG). */
 import type { Engine } from "./engine.ts";
+import { ensureMotionPlate } from "./objectMotion.ts";
 import { halvesToFloats } from "../gpu/half.ts";
 import { encodeGainMapJpeg, encodeHeic, encodeJpeg, encodeLinearDng, encodeTiff16 } from "../output/encoders.ts";
 import type { ExportFormat } from "./protocol.ts";
@@ -13,6 +14,7 @@ export async function exportPhoto(eng: Engine, format: ExportFormat, quality: nu
   const src = eng.renderSource(true);
   const p = s.params;
   await eng.ensureSelections(s, p);
+  await ensureMotionPlate(eng, s, p);
   const W = src.width, H = src.height;
   const base = s.name.replace(/\.[^.]+$/, "");
   const P = eng.profiler;

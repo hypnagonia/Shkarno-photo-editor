@@ -3,7 +3,7 @@ import type { Engine } from "./engine.ts";
 import { floatsToHalves, halvesToFloats } from "../gpu/half.ts";
 import type { Params, RetouchStroke } from "../decision/params.ts";
 import { featherMask, prefixKeys, resize, strokeMask, strokeRect, type Rect } from "../retouch/geometry.ts";
-import { WorkerInpainter } from "../retouch/inpaint.ts";
+import { WorkerInpainter, type Inpainter } from "../retouch/inpaint.ts";
 import { fromDisplay, toDisplay } from "../restore/display.ts";
 import { phoneForced } from "../device.ts";
 import { type Session, isMobile } from "./session.ts";
@@ -55,13 +55,8 @@ export async function inpaintStroke(eng: Engine, s: Session, st: NonNullable<Ses
   for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) img[i * 3 + c] = toDisplay(src[i * 4 + c] * s.gain);
   const long = Math.max(W, H);
   const hole = strokeMask(stroke, W, H, rect, rect.w, rect.h, Math.max(2, Math.round(long / 1000)));
-  const model = isMobile() ? "migan" : "lama";
-  st.painter ??= new WorkerInpainter(model, eng.base, phoneForced(), {
-    log: (t) => eng.log(t),
-    progress: (loaded, total) => eng.progress(`download ${model}`, `${(loaded / 1e6).toFixed(0)} / ${(total / 1e6).toFixed(0)} MB`, loaded / total),
-  });
   const t0 = performance.now();
-  const fill = await st.painter.run(img, rect.w, rect.h, hole);
+  const fill = await (await painterFor(eng, s)).run(img, rect.w, rect.h, hole);
   eng.log(`magic brush: ${rect.w}×${rect.h} region filled in ${Math.round(performance.now() - t0)} ms`);
   const a = featherMask(hole, rect.w, rect.h, Math.max(3, rect.w / 128));
   const lin = new Float32Array(n * 3);
@@ -100,4 +95,24 @@ export function scaleRetouch(eng: Engine, s: Session, k: number) {
     const before = a.before.slice(a.before.length - texes).map((b) => floatsToHalves(resize(halvesToFloats(b), a.rect.w, a.rect.h, 4, r.w, r.h)));
     return { key: a.key, rect: r, before };
   });
+}
+
+/**
+ * The photo's inpainting network (LaMa on computers, MI-GAN on phones), shared by the magic
+ * brush and a moving object's background. On a phone, tap-to-select's worker is ended
+ * first: two networks' runtimes side by side (≈ 450 MB each, never shrinking) went past
+ * the page's memory budget when a stroke came within 30 s of a selection. It restarts
+ * from the embedding the engine keeps.
+ */
+export async function painterFor(eng: Engine, s: Session): Promise<Inpainter> {
+  if (isMobile() && s.sel?.sam.running) {
+    s.sel.sam.dispose();
+    await new Promise((r) => setTimeout(r, 500)); // (its memory goes back a moment after it ends)
+  }
+  const st = (s.retouch ??= { applied: [] });
+  const model = isMobile() ? "migan" : "lama";
+  return (st.painter ??= new WorkerInpainter(model, eng.base, phoneForced(), {
+    log: (t) => eng.log(t),
+    progress: (loaded, total) => eng.progress(`download ${model}`, `${(loaded / 1e6).toFixed(0)} / ${(total / 1e6).toFixed(0)} MB`, loaded / total),
+  }));
 }
