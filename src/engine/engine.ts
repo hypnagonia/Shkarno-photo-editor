@@ -31,6 +31,7 @@ import type { AnalysisReport } from "../analysis/types.ts";
 import { decide, type DecisionResult } from "../decision/engine.ts";
 import { autoFocus, objectDepthRange } from "../decision/focus.ts";
 import { buildAutoLayers } from "../layers/auto.ts";
+import { filmOf } from "../film/film.ts";
 import { embeddedPreviewPixels, embeddedPreviewStats, HI_QS, MEDIAN, REF_QS, chromaStats, renderedQuantiles, shadowMatch } from "../decode/preview.ts";
 import { displayQuantiles } from "../decision/autoCurves.ts";
 import { allMask, makeLayer } from "../layers/model.ts";
@@ -916,9 +917,17 @@ export class Engine {
       for (let y = 0, k = 0; y < src.height; y += HS) for (let x = 0; x < src.width; x += HS) sub[k++] = all[y * src.width + x];
       pixels = new Uint8Array(sub.buffer);
     }
-    const calib = wantCalib ? renderedQuantiles(new Uint8Array(data)) : undefined; // read before `data` is transferred
-    const calibHi = wantCalib ? renderedQuantiles(new Uint8Array(data), HI_QS) : undefined;
-    const oursC = wantCalib && s.calib?.black && !s.calib.color ? chromaStats(new Uint8Array(data)) : undefined;
+    // Calibration measures the development, not the film over it (its glow lifts the shadows,
+    // its shoulder lowers the whites): with a film on, a render of its own without it.
+    let cdata = data;
+    if (wantCalib && filmOf(p)) {
+      const bare = { ...p, film: { ...p.film!, character: "off" as const } };
+      const rc = await this.renderer.render(src, s.maps, bare, { wb: this.wbFor(bare), gain: s.gain, lightLinear: s.lightLinear, output: "p38", debugView: this.view, region: this.region, zoneRange: this.zoneRange(), draft }, dof);
+      cdata = await this.gpu.readTexture(rc.tex, 0, 0, src.width, src.height, 4);
+    }
+    const calib = wantCalib ? renderedQuantiles(new Uint8Array(cdata)) : undefined; // read before `data` is transferred
+    const calibHi = wantCalib ? renderedQuantiles(new Uint8Array(cdata), HI_QS) : undefined;
+    const oursC = wantCalib && s.calib?.black && !s.calib.color ? chromaStats(new Uint8Array(cdata)) : undefined;
     const oursChroma = oursC?.mean;
     if (this.display) this.post({ type: "preview", width: src.width, height: src.height, space: "p3", final, ms: performance.now() - t0 });
     else this.post({ type: "preview", width: src.width, height: src.height, data, space: "p3", final, ms: performance.now() - t0 }, [data]);

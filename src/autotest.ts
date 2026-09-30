@@ -52,10 +52,11 @@ export async function runAutotest(app: AutotestApp) {
   });
   const finalPreview = (what: string) => waitFor((m) => m.type === "preview" && !!m.final, what);
   const settle = (ms = 1500) => new Promise((r) => setTimeout(r, ms));
-  /** Chrome's own account of JS + WebAssembly memory, by worker (where the browser has it). */
+  /** Chrome's own account of JS + WebAssembly memory, by worker (where the browser has it; ?jsmem). */
   const jsMem = async (): Promise<Record<string, number>> => {
     const pm = performance as Performance & { measureUserAgentSpecificMemory?: () => Promise<{ breakdown: Array<{ bytes: number; types: string[]; attribution: Array<{ url?: string; scope?: string }> }> }> };
-    if (!pm.measureUserAgentSpecificMemory) return {};
+    // Only when asked (?jsmem): the browser answers after its next full GC — up to ~20 s a call.
+    if (!q.has("jsmem") || !pm.measureUserAgentSpecificMemory) return {};
     try {
       const r = await pm.measureUserAgentSpecificMemory();
       const out: Record<string, number> = {};
