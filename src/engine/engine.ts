@@ -1506,7 +1506,8 @@ export class Engine {
       const r = await this.renderer.render(src, s.maps, p, { wb: this.wbFor(p), gain: s.gain, lightLinear: s.lightLinear, output: "p38", dither: false }, dof);
       return new Uint8Array(await this.gpu.readTexture(r.tex, 0, 0, t.w, t.h, 4));
     };
-    const p = s.params;
+    // Judged without the film: its grain and glow are a chosen look, not noise or haze.
+    const p = s.params.film ? { ...s.params, film: { ...s.params.film, character: "off" as const } } : s.params;
     const final = await read(p, p.enable.dof && p.dof.strength > 0);
     const before = await read(this.cameraParams(), false);
     const seg = { ...s.scene.seg, groups: GROUPS };

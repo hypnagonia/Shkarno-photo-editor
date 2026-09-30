@@ -47,7 +47,8 @@ export const FILM_CHARACTERS: Record<Exclude<FilmCharacter, "off">, Character> =
 
 export const FILM_FORMATS = [{ mm: 36, id: "35" }, { mm: 70, id: "67" }, { mm: 125, id: "45" }] as const;
 
-export const defaultFilm = (): Film => ({ character: "off", strength: 1, format: 36 });
+/** What a new photo starts with (defaultParams). */
+export const defaultFilm = (): Film => ({ character: "cinema", strength: 1, format: 36 });
 
 /** The film to render, if any (grain from edits saved before the Film card renders on its own). */
 export function filmOf(p: Params): Film | undefined {

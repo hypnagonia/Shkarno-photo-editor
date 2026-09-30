@@ -6,7 +6,11 @@ import { defaultParams } from "../src/decision/params.ts";
 test("off, zero strength and absent render nothing", () => {
   assert.equal(filmUniforms({ character: "off", strength: 1, format: 36 }, 4032), undefined);
   assert.equal(filmUniforms({ character: "negative", strength: 0, format: 36 }, 4032), undefined);
-  assert.equal(filmOf(defaultParams()), undefined);
+  assert.equal(filmOf({ ...defaultParams(), film: undefined }), undefined);
+});
+
+test("a new photo starts with cinema texture", () => {
+  assert.equal(filmOf(defaultParams())?.character, "cinema");
 });
 
 test("a larger negative shows finer, weaker grain and tighter halation", () => {

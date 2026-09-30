@@ -17,7 +17,7 @@ const CHARACTERS: FilmCharacter[] = ["off", "clean", "negative", "cinema"];
 
 export function createFilmPanel(ctx: FilmContext) {
   const root = el("div", { class: "film" });
-  const film = (p: Params) => (p.film ??= defaultFilm());
+  const film = (p: Params) => (p.film ??= { ...defaultFilm(), character: "off" });
   const edit = () => { ctx.changed(t("film.title")); render(); };
 
   const chars = el("div", { class: "chips film-chars" });
@@ -28,7 +28,7 @@ export function createFilmPanel(ctx: FilmContext) {
     const p = ctx.params(); if (!p) return;
     const f = film(p);
     f.strength = parseFloat(strength.value);
-    if (f.character === "off") f.character = "negative";
+    if (f.character === "off") f.character = defaultFilm().character;
     strengthOut.textContent = `${Math.round(f.strength * 100)}%`;
     edit();
   };
@@ -39,7 +39,8 @@ export function createFilmPanel(ctx: FilmContext) {
 
   function render() {
     const p = ctx.params();
-    const f = p?.film ?? defaultFilm();
+    // No film on this edit (saved before the Film card existed): off, as it renders.
+    const f = p?.film ?? { ...defaultFilm(), character: "off" as const };
     chars.replaceChildren(...CHARACTERS.map((c) => {
       const b = el("button", { class: "chip" + (f.character === c ? " on" : ""), text: t(`film.${c}`) });
       b.onclick = () => { const q = ctx.params(); if (!q) return; film(q).character = c; edit(); };

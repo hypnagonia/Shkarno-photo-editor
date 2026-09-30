@@ -176,7 +176,8 @@ export interface Params {
    * halation, glow, softness (src/film/film.ts) — at a strength 0 … 1.5 (1 = as that
    * film shows it), on a frame of a format (the long side in mm: 36 = 35 mm, 70 = 6×7,
    * 125 = 4×5; a larger negative shows finer grain and tighter halation).
-   * Absent = off (and `grain` above, from edits saved before, renders as it did).
+   * New photos start with cinema texture; absent = off (edits saved before it existed
+   * look as they did, their `grain` above included).
    */
   film?: Film;
   /** Tone equalizer (src/tone/toneEq.ts): exposure by brightness zone of a smoothed mask. Absent = off. */
@@ -244,6 +245,7 @@ export function defaultParams(): Params {
     depth: { near: 1, far: 1 },
     vignette: { amount: 0, midpoint: 0.5, feather: 0.6, roundness: 0.3, highlights: 0.5 },
     grain: { amount: 0, size: 0.35, roughness: 0.5, color: 0 },
+    film: { character: "cinema", strength: 1, format: 36 },
     dof: { focus: 0.3, strength: 0, points: [], auto: false },
     render: { engine: "img", purity: 0, strength: 1 },
   };
