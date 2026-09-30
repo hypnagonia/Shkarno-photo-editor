@@ -264,6 +264,35 @@ fn op_exposure(L: LayerRec, e: vec3<f32>) -> vec3<f32> {
 }
 
 /**
+ * The distance here with crisp edges. The depth map is coarser than the photo: across an
+ * object's edge it runs from near to far over a few guide texels, and fog laid on that
+ * would leave a clear rim of sky around a tree and in the gaps of its crown. Where a
+ * 5×5 grid of guide texels 4 apart (±8, the width of that spread) holds both near and far, the pixel takes the depth of the side its
+ * colour resembles (a leaf, the tree's; the sky between leaves, the sky's).
+ */
+fn crisp_dist() -> f32 {
+  let c = vec2<i32>(floor(lay_uv * vec2<f32>(gsz())));
+  var dmin = 1e9; var dmax = -1e9;
+  for (var j = -2; j <= 2; j++) { for (var i = -2; i <= 2; i++) {
+    let d = gl(m2, c + vec2<i32>(i, j) * 4).w; dmin = min(dmin, d); dmax = max(dmax, d);
+  } }
+  if (dmax - dmin < 0.12) { return lay_dist; }
+  let mid = 0.5 * (dmin + dmax);
+  var cn = vec3<f32>(0.0); var cf = vec3<f32>(0.0); var dn = 0.0; var df = 0.0; var nn = 0.0; var nf = 0.0;
+  for (var j = -2; j <= 2; j++) { for (var i = -2; i <= 2; i++) {
+    let q = c + vec2<i32>(i, j) * 4;
+    let d = gl(m2, q).w; let col = gl(guide, q).rgb;
+    if (d < mid) { cn += col; dn += d; nn += 1.0; } else { cf += col; df += d; nf += 1.0; }
+  } }
+  cn /= nn; cf /= nf;
+  let a = pix_enc - cn; let b = pix_enc - cf;
+  let an = dot(a, a); let bf = dot(b, b);
+  // Toward the side whose colour is nearer (soft: an unclear pixel stays in between).
+  let wf = an / max(an + bf, 1e-6);
+  return mix(dn / nn, df / nf, smoothstep(0.2, 0.8, wf));
+}
+
+/**
  * The real distance a depth-map value stands for (relative): the map is linear in
  * disparity, and distance goes as 1 / disparity — near things spread out, the far
  * distance runs on and on (finite at the far end: 12.5).
@@ -277,7 +306,7 @@ fn fog_z(d: f32) -> f32 { let c = clamp(d, 0.0, 1.0); return c / (1.0 - 0.92 * c
  * p0.x 1: half-way fog at about four times the starting distance's depth.
  */
 fn op_fog(L: LayerRec, e: vec3<f32>) -> vec3<f32> {
-  let z = max(fog_z(lay_dist) - fog_z(L.p0.y), 0.0);
+  let z = max(fog_z(crisp_dist()) - fog_z(L.p0.y), 0.0);
   let f = 1.0 - exp(-0.35 * max(L.p0.x, 0.0) * z);
   return srgb_oetf(clamp(mix(srgb_eotf(e), L.p1.xyz, f), vec3<f32>(0.0), vec3<f32>(1.0)));
 }
