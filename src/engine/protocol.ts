@@ -67,6 +67,8 @@ export type ToWorker =
   | { type: "upscale-now" }
   | { type: "params"; params: Params; draft?: boolean }
   | { type: "view"; view: 0 | 1 | 2 | 4 | 5 | 6 | 9 | 11; before?: boolean; region?: number; range?: [number, number] }
+  /** The crop being set: the preview shows the whole turned photo (its crop drawn by the page). */
+  | { type: "framing"; on: boolean }
   | { type: "focus"; action: "toggle"; x: number; y: number }
   | { type: "focus"; action: "move"; index: number; x: number; y: number }
   | { type: "focus"; action: "clear" }
@@ -98,7 +100,7 @@ export type FromWorker =
   | { type: "ready"; caps: Capabilities; looks: Array<{ id: string; name: string; description: string }> }
   | { type: "progress"; stage: string; detail?: string; frac?: number }
   /** `data` absent: the frame is already on the page's canvas (GPU display). */
-  | { type: "preview"; width: number; height: number; data?: ArrayBuffer; space: "p3" | "srgb"; final: boolean; ms: number }
+  | { type: "preview"; width: number; height: number; data?: ArrayBuffer; space: "p3" | "srgb"; final: boolean; ms: number; /** The photo's size before the frame (its proportions map taps through the frame). */ srcW?: number; srcH?: number }
   /** Whether the handed-over canvas could be set up for GPU display (else the page draws previews itself). */
   | { type: "display"; ok: boolean; message?: string }
   | { type: "analysis"; summary: Summary; decisions: Decision[]; auto: Params; params: Params; dof: { justified: boolean; focus: number; strength: number; reason: string; x?: number; y?: number; zoneEdges?: number[]; zones?: Array<{ share: number; label: string; lo: number; hi: number }>; bands?: Array<{ share: number; label: string; lo: number; hi: number }> }; exposureSuggestion: number; autoCurves?: AutoCurveBands; cellCoverage?: Record<string, number>; /** Why this photo has no depth map (it opened without one), if so. */ noDepth?: string; /** The camera's own white balance (the neutral one). */ cameraWB?: { temp: number; tint: number } }

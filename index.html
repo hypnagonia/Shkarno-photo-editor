@@ -18,15 +18,60 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="Shkarno" />
-    <meta name="description" content="RAW, ProRAW and HEIC development in the browser. Photos never leave the device." />
+    <title>Shkarno — free RAW photo editor in your browser (ProRAW, DNG, HEIC)</title>
+    <meta name="description" content="Shkarno is a free, private RAW photo editor that runs in your browser: develop iPhone ProRAW, DNG, HEIC and JPEG on your device with automatic development, AI masks, magic eraser, crop, motion blur, light rays, fog and film looks. Nothing is uploaded." />
+    <meta name="keywords" content="RAW photo editor, online RAW editor, ProRAW editor, DNG editor, HEIC editor, browser photo editor, free photo editor, AI photo editor, magic eraser, remove objects from photo, motion blur, film emulation, Lightroom alternative" />
+    <meta name="author" content="Jenya" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="https://img.jenyadoesapps.com/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Shkarno" />
+    <meta property="og:url" content="https://img.jenyadoesapps.com/" />
+    <meta property="og:title" content="Shkarno — free RAW photo editor in your browser" />
+    <meta property="og:description" content="Develop ProRAW, DNG and HEIC on your own device: automatic development, AI masks, magic eraser, crop, motion blur, light rays and film looks. Free, private, nothing uploaded." />
+    <meta property="og:image" content="https://img.jenyadoesapps.com/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Shkarno — free RAW photo editor in your browser" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Shkarno — free RAW photo editor in your browser" />
+    <meta name="twitter:description" content="Develop ProRAW, DNG and HEIC on your own device. Free, private, nothing uploaded." />
+    <meta name="twitter:image" content="https://img.jenyadoesapps.com/og.png" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Shkarno",
+        "url": "https://img.jenyadoesapps.com/",
+        "image": "https://img.jenyadoesapps.com/og.png",
+        "description": "A free, private RAW photo editor that runs in the browser: iPhone ProRAW, DNG, HEIC and JPEG developed on the device with WebGPU.",
+        "applicationCategory": "MultimediaApplication",
+        "applicationSubCategory": "Photo editor",
+        "operatingSystem": "Any (a browser with WebGPU: Safari on iOS 26 / macOS 26, Chrome, Edge)",
+        "browserRequirements": "Requires WebGPU",
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "featureList": ["RAW, ProRAW, DNG and HEIC development", "Automatic development matched to the camera", "AI scene masks and tap-to-select", "Magic brush object removal", "Crop, straighten, rotate", "Motion blur, lens blur, fog, light rays", "Skin smoothing", "Film emulation", "Ultra HDR JPEG, HEIC, TIFF and DNG export", "Works offline"],
+        "author": { "@type": "Person", "name": "Jenya", "sameAs": ["https://www.linkedin.com/in/zunso/", "https://github.com/hypnagonia"] },
+        "sameAs": ["https://github.com/hypnagonia/Shkarno-photo-editor"],
+        "license": "https://opensource.org/licenses/MIT"
+      }
+    </script>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="icon" href="/favicon.png" type="image/png" sizes="64x64" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <title>Shkarno</title>
   </head>
   <body>
     <div id="app"></div>
+    <noscript>
+      <main style="max-width: 640px; margin: 40px auto; padding: 0 20px; font: 16px/1.6 system-ui, sans-serif">
+        <h1>Shkarno — free RAW photo editor in your browser</h1>
+        <p>Develop iPhone ProRAW, DNG, HEIC and JPEG photos on your own device. Automatic development matched to your camera, AI masks, a magic brush that removes objects, crop and straighten, motion blur, light rays, fog, skin smoothing and film looks — exported as JPEG, Ultra HDR, HEIC, TIFF or DNG. Nothing is uploaded; it works offline.</p>
+        <p>Shkarno needs JavaScript and WebGPU (Safari on iOS 26 or macOS 26, Chrome, Edge).</p>
+        <p><a href="https://github.com/hypnagonia/Shkarno-photo-editor">Source code on GitHub</a> · MIT licence</p>
+      </main>
+    </noscript>
     <script type="module" src="/src/main.ts"></script>
     <script type="module" src="/src/pwa.ts"></script>
   </body>

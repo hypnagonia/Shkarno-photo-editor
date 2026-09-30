@@ -1,6 +1,7 @@
 /**
  * The Brush card (magic brush, src/retouch): while it is open one finger paints over what
- * should disappear; releasing fills it in. Brush size, undo the last stroke, clear all.
+ * should disappear; releasing fills it in. Brush size, undo the last stroke, clear all —
+ * and skin smoothing (the whole photo's skin, no painting).
  */
 import { el } from "./dom.ts";
 import { t } from "./i18n.ts";
@@ -19,6 +20,16 @@ export function createRetouchPanel(ctx: RetouchContext) {
   const sizeOut = el("output");
   size.oninput = () => { ctx.brush.radius = parseFloat(size.value); sizeOut.textContent = `${Math.round(ctx.brush.radius * 200 * 10) / 10}%`; };
   const count = el("p", { class: "muted" });
+  // Skin smoothing: applied on release (a drag previews through the usual draft renders).
+  const skin = el("input", { type: "range", min: "0", max: "1", step: "0.01" });
+  const skinOut = el("output");
+  skin.oninput = () => {
+    const p = ctx.params(); if (!p) return;
+    p.skinSmooth = parseFloat(skin.value);
+    skinOut.textContent = `${Math.round(p.skinSmooth * 100)}%`;
+    ctx.changed(t("brush.skin"));
+  };
+  skin.ondblclick = () => { skin.value = "0"; skin.oninput?.(new Event("input")); };
   const undo = el("button", { class: "btn small", text: t("brush.undo") });
   const clear = el("button", { class: "btn small ghost", text: t("brush.clear") });
   undo.onclick = () => { const p = ctx.params(); if (!p?.retouch?.length) return; p.retouch = p.retouch.slice(0, -1); ctx.changed(t("brush.undo")); render(); };
@@ -31,6 +42,9 @@ export function createRetouchPanel(ctx: RetouchContext) {
     const n = ctx.params()?.retouch?.length ?? 0;
     count.textContent = n ? t("brush.count", { n }) : t("brush.none");
     undo.disabled = clear.disabled = !n;
+    const sm = ctx.params()?.skinSmooth ?? 0;
+    skin.value = String(sm);
+    skinOut.textContent = `${Math.round(sm * 100)}%`;
   }
 
   root.append(
@@ -38,6 +52,8 @@ export function createRetouchPanel(ctx: RetouchContext) {
     el("div", { class: "row" }, el("label", { text: t("brush.size") }), size, sizeOut),
     el("div", { class: "chips" }, undo, clear),
     count,
+    el("div", { class: "row" }, el("label", { text: t("brush.skin") }), skin, skinOut),
+    el("p", { class: "muted", text: t("brush.skinHint") }),
   );
   return { el: root, render, leave: () => { ctx.brush.on = false; } };
 }

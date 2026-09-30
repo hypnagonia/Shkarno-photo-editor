@@ -15,7 +15,7 @@ import layersWgsl from "../gpu/shaders/layers.wgsl?raw";
 import { TONE_EQ_DETAIL, toneEqActive, toneEqLut } from "../tone/toneEq.ts";
 import { contrastEqActive, edgeSigma, levels, stripApron, type ContrastEq } from "../tone/contrastEq.ts";
 import ceqWgsl from "../gpu/shaders/render_ceq.wgsl?raw";
-import { ATLAS_W, hasBlurLayers, hasMotionLayers, objectMotionLayer, packLayers, RECORD } from "../layers/gpu.ts";
+import { ATLAS_W, hasBlurLayers, hasMotionLayers, objectMotionLayer, raysLayer, packLayers, RECORD } from "../layers/gpu.ts";
 import type { MaskShape } from "../layers/model.ts";
 import detailWgsl from "../gpu/shaders/render_detail.wgsl?raw";
 import dofWgsl from "../gpu/shaders/render_dof.wgsl?raw";
@@ -25,6 +25,9 @@ import filmWgsl from "../gpu/shaders/render_film.wgsl?raw";
 import motionWgsl from "../gpu/shaders/render_motion.wgsl?raw";
 import { OBJECT_ZOOM } from "../layers/motion.ts";
 import motionObjectWgsl from "../gpu/shaders/render_motion_object.wgsl?raw";
+import frameWgsl from "../gpu/shaders/render_frame.wgsl?raw";
+import raysWgsl from "../gpu/shaders/render_rays.wgsl?raw";
+import type { Affine } from "../geometry/frame.ts";
 import filmGlowWgsl from "../gpu/shaders/film_glow.wgsl?raw";
 import { filmOf, filmUniforms } from "../film/film.ts";
 import gainmapWgsl from "../gpu/shaders/render_gainmap.wgsl?raw";
@@ -192,7 +195,7 @@ export class Renderer {
       .mat3(o.wb)
       .f32(p.exposure, o.gain, p.denoise.luma, p.denoise.chroma)
       .f32(p.denoise.shadowBoost, p.dehaze.strength, p.dehaze.beta, p.dehaze.minT)
-      .f32(o.lightLinear[0], o.lightLinear[1], o.lightLinear[2], 0)
+      .f32(o.lightLinear[0], o.lightLinear[1], o.lightLinear[2], Math.min(1, Math.max(0, p.skinSmooth ?? 0)))
       .f32(p.local.compression, p.local.clarity, p.local.texture, p.local.anchorEV ?? MIDDLE_GREY_EV)
       .f32(p.tone.shadows, p.tone.highlights, p.depth.near, p.depth.far)
       .f32(p.color.saturation, p.color.vibrance, o.region ?? 0, lutSize)
@@ -294,6 +297,21 @@ export class Renderer {
     return a;
   }
 
+  /**
+   * The finished preview through the frame (src/geometry/frame.ts): `A` maps the output
+   * (0…1) to the photo (0…1), which is W × H from row `top` of `tex`. rgba8unorm, outW × outH.
+   */
+  async frame(tex: GPUTexture, top: number, W: number, H: number, A: Affine, outW: number, outH: number): Promise<GPUTexture> {
+    const gpu = this.gpu;
+    const out = this.target("frame8", outW, outH, "rgba8unorm");
+    await gpu.run("render.frame", (enc, temp) => {
+      const u = gpu.uniform(new Uniforms(16).u32(outW, outH, 0, 0).f32(A[0], A[1], A[2], 0).f32(A[3], A[4], A[5], 0).f32(W, H, top, 0).bytes(), "frame.u");
+      temp.push(u);
+      gpu.dispatch(enc, gpu.pipeline("render.frame", frameWgsl), [u, tex.createView(), this.sampler, out.createView()], Math.ceil(outW / 8), Math.ceil(outH / 8));
+    });
+    return out;
+  }
+
   /** Frees all cached render targets (after an export, or when a photo closes). */
   releaseTargets() {
     for (const t of this.targets.values()) this.gpu.release(t);
@@ -382,10 +400,14 @@ export class Renderer {
     const objL = !objB ? 0 : objV
       ? Math.max(...[[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => Math.hypot(x - objV[0], y - objV[1]))) * (Math.exp(objZ) - 1)
       : objB.amount * 0.06 * Math.max(W, H);
+    // Light rays: gathered toward the source over `length` of the way (the strips' apron: that far).
+    const rays = ((o.debugView ?? 0) < 7 || o.debugView === 11) ? raysLayer(p.layers ?? [], p.autoCurves ?? 1, p.enable)?.params : undefined;
+    const raysS = rays ? [rays.x * W, rays.y * H] : undefined;
+    const raysL = rays && raysS ? Math.min(1, Math.max(0.02, rays.length)) * Math.max(...[[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => Math.hypot(x - raysS[0], y - raysS[1]))) : 0;
     const maxRadius = depthDof ? p.dof.strength * 0.022 * Math.max(W, H) : 0;
     const y0 = strip?.y0 ?? 0, rows = strip?.rows ?? H;
     const ceqOn = contrastEqActive(p.contrastEq) && (o.debugView ?? 0) < 7;
-    const apron = strip ? Math.max(dof ? Math.ceil(Math.max(maxRadius, blurR)) + 4 : 3, ceqOn ? stripApron(W / src.fullWidth) : 0, motionR > 0 ? Math.ceil(motionMax / 2) + 4 : 0, objL > 0 ? Math.ceil(objL) + 4 : 0) : 0;
+    const apron = strip ? Math.max(dof ? Math.ceil(Math.max(maxRadius, blurR)) + 4 : 3, ceqOn ? stripApron(W / src.fullWidth) : 0, motionR > 0 ? Math.ceil(motionMax / 2) + 4 : 0, objL > 0 ? Math.ceil(objL) + 4 : 0, raysL > 0 ? Math.ceil(raysL) + 4 : 0) : 0;
     // Strip starts are aligned to 64 rows so the depth-of-field mip grid (up to
     // 2^5-row texels) lines up with the full-image grid: no seams between strips.
     // Heights are rounded up to 64 rows too (mip level sizes round down, so an
@@ -399,7 +421,7 @@ export class Renderer {
     const t2 = this.target("detail", W, th, "rgba16float");
     const gainT = hdrStops > 0 ? this.target("gain", W, th, "r32float") : undefined;
     const distT = dof ? this.target("dist", W, th, "r32float") : this.target("distDummy", 1, 1, "r32float");
-    const motionT = motionR > 0 || objL > 0 ? this.target("motion", W, th, "rgba16float") : undefined;
+    const motionT = motionR > 0 || objL > 0 || raysL > 0 ? this.target("motion", W, th, "rgba16float") : undefined;
     const scale = W / src.fullWidth;
     await gpu.run("render.tone+detail", (enc, temp) => {
       this.toneDispatch(enc, temp, src, maps, p, o, lutSize, !identity, p.enable.lut && !isNeutral(p.profile), t1, distT, ty0, th, gainT, motionT);
@@ -407,7 +429,9 @@ export class Renderer {
       // Sharpening radius is defined at full resolution; a preview sees it scaled.
       const radius = p.sharpen.radius * Math.max(scale, 0.35);
       const amount = p.enable.sharpen ? p.sharpen.amount * Math.min(1, scale * 1.5 + 0.2) : 0;
-      const ud = gpu.uniform(new Uniforms(8).u32(W, th, gainT ? 1 : 0, 0).f32(amount, radius, p.sharpen.threshold, 0).bytes(), "detail.u");
+      // Skin smoothing's tap spacing: a share of the long side, the same at every size.
+      const skinStep = Math.max(1, 0.0016 * Math.max(W, H));
+      const ud = gpu.uniform(new Uniforms(8).u32(W, th, gainT ? 1 : 0, 0).f32(amount, radius, p.sharpen.threshold, skinStep).bytes(), "detail.u");
       temp.push(ud);
       gpu.dispatch(enc, gpu.pipeline("render.detail", detailWgsl), [ud, t1.createView(), t2.createView(), (gainT ?? this.target("gainDummy", 1, 1, "r32float")).createView()], Math.ceil(W / 8), Math.ceil(th / 8));
     });
@@ -450,6 +474,22 @@ export class Renderer {
         gpu.dispatch(enc, smear, [u0, final.createView(), motionT.createView(), accB.createView(), undefined, this.sampler, accA.createView()], Math.ceil(W / 8), Math.ceil(th / 8));
         gpu.dispatch(enc, smear, [u1, final.createView(), motionT.createView(), accA.createView(), undefined, this.sampler, accB.createView()], Math.ceil(W / 8), Math.ceil(th / 8));
         gpu.dispatch(enc, gpu.pipeline("render.motionObject.composite", motionObjectWgsl, "composite"), [u0, final.createView(), motionT.createView(), accB.createView(), plateTex.createView(), this.sampler, out.createView()], Math.ceil(W / 8), Math.ceil(th / 8));
+      });
+      final = out;
+    }
+    if (motionT && rays && raysS && raysL > 0) {
+      // Light rays (render_rays.wgsl): gather, fill, then added into the free image target.
+      const accA = this.target("objA", W, th, "rgba16float"), accB = this.target("objB", W, th, "rgba16float");
+      const out = final === t1 ? t2 : t1;
+      const uni = (pass: number) => new Uniforms(12).u32(W, th, finalLinear ? 1 : 0, pass)
+        .f32(raysS[0], raysS[1] - ty0, Math.min(1, Math.max(0.02, rays.length)), Math.max(0, rays.amount)).f32(Math.min(0.97, Math.max(0, rays.threshold)), 0, 0, 0).bytes();
+      await gpu.run("render.rays", (enc, temp) => {
+        const us = [0, 1, 2].map((k) => gpu.uniform(uni(k), "rays.u"));
+        temp.push(...us);
+        const pipe = gpu.pipeline("render.rays", raysWgsl);
+        gpu.dispatch(enc, pipe, [us[0], final.createView(), motionT.createView(), accB.createView(), this.sampler, accA.createView()], Math.ceil(W / 8), Math.ceil(th / 8));
+        gpu.dispatch(enc, pipe, [us[1], final.createView(), motionT.createView(), accA.createView(), this.sampler, accB.createView()], Math.ceil(W / 8), Math.ceil(th / 8));
+        gpu.dispatch(enc, pipe, [us[2], final.createView(), motionT.createView(), accB.createView(), this.sampler, out.createView()], Math.ceil(W / 8), Math.ceil(th / 8));
       });
       final = out;
     }

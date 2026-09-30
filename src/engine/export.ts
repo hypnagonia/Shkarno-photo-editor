@@ -5,6 +5,7 @@ import { halvesToFloats } from "../gpu/half.ts";
 import { encodeGainMapJpeg, encodeHeic, encodeJpeg, encodeLinearDng, encodeTiff16 } from "../output/encoders.ts";
 import type { ExportFormat } from "./protocol.ts";
 import { contrastEqActive } from "../tone/contrastEq.ts";
+import { frameSize, frameToSource, isIdentityFrame, resampleFrame } from "../geometry/frame.ts";
 
 export async function exportPhoto(eng: Engine, format: ExportFormat, quality: number, space: "srgb" | "p3", stripRows = 512) : Promise<{ blob: Blob; name: string; ms: number }> {
   const s = eng.s;
@@ -16,6 +17,14 @@ export async function exportPhoto(eng: Engine, format: ExportFormat, quality: nu
   await eng.ensureSelections(s, p);
   await ensureMotionPlate(eng, s, p);
   const W = src.width, H = src.height;
+  // The frame (turns, mirror, straightening, crop): on the rendered photo, before encoding.
+  const fr = isIdentityFrame(p.frame) ? undefined : p.frame!;
+  const [FW, FH] = fr ? frameSize(fr, W, H) : [W, H];
+  const framed = <T extends Uint8ClampedArray<ArrayBuffer> | Float32Array<ArrayBuffer>>(buf: T, w = W, h = H, ow = FW, oh = FH): T => {
+    if (!fr) return buf;
+    eng.progress("export", "framing");
+    return resampleFrame(buf, w, h, frameToSource(fr, W, H), ow, oh);
+  };
   const base = s.name.replace(/\.[^.]+$/, "");
   const P = eng.profiler;
   const o = { wb: eng.wbFor(p), gain: s.gain, lightLinear: s.lightLinear };
@@ -39,7 +48,7 @@ export async function exportPhoto(eng: Engine, format: ExportFormat, quality: nu
         await eng.readHalfRows(r.tex, r.top, W, rows, f.subarray(y0 * W * 4, (y0 + rows) * W * 4));
       }));
       eng.progress("export", "writing DNG");
-      const blob = await P.time("encode DNG", () => encodeLinearDng(f, W, H, s.decoded.meta));
+      const blob = await P.time("encode DNG", () => encodeLinearDng(framed(f), FW, FH, s.decoded.meta));
       eng.post({ type: "profile", stages: P.stages });
       return { blob, name: `${base}-processed-linear.dng`, ms: performance.now() - t0 };
     }
@@ -50,7 +59,7 @@ export async function exportPhoto(eng: Engine, format: ExportFormat, quality: nu
         await eng.readHalfRows(r.tex, r.top, W, rows, f.subarray(y0 * W * 4, (y0 + rows) * W * 4));
       }));
       eng.progress("export", "writing TIFF");
-      const blob = await P.time("encode TIFF", () => encodeTiff16(f, W, H, s.decoded.meta));
+      const blob = await P.time("encode TIFF", () => encodeTiff16(framed(f), FW, FH, s.decoded.meta));
       eng.post({ type: "profile", stages: P.stages });
       return { blob, name: `${base}-edit.tif`, ms: performance.now() - t0 };
     }
@@ -73,7 +82,8 @@ export async function exportPhoto(eng: Engine, format: ExportFormat, quality: nu
         }
       }, () => `${W}×${H} + gain map ${gw}×${gh}, +${stops} EV`);
       eng.progress("export", "encoding JPEG (HDR)");
-      const blob = await P.time("encode JPEG (HDR)", () => encodeGainMapJpeg(rgba, W, H, gain, gw, gh, stops, space, quality, s.decoded.meta));
+      const fgw = Math.ceil(FW / s2), fgh = Math.ceil(FH / s2);
+      const blob = await P.time("encode JPEG (HDR)", () => encodeGainMapJpeg(framed(rgba), FW, FH, framed(gain, gw, gh, fgw, fgh), fgw, fgh, stops, space, quality, s.decoded.meta));
       eng.post({ type: "profile", stages: P.stages });
       return { blob, name: `${base}-edit-hdr.jpg`, ms: performance.now() - t0 };
     }
@@ -83,7 +93,8 @@ export async function exportPhoto(eng: Engine, format: ExportFormat, quality: nu
       rgba.set(new Uint8Array(await gpu.readTexture(r.tex, 0, r.top, W, rows, 4)), y0 * W * 4);
     }), () => `${W}×${H} in ${Math.ceil(H / STRIP)} strips`);
     eng.progress("export", `encoding ${format.toUpperCase()}`);
-    const blob = await P.time(`encode ${format}`, () => format === "heic" ? encodeHeic(rgba, W, H, space, quality) : encodeJpeg(rgba, W, H, space, quality, s.decoded.meta));
+    const out = framed(rgba);
+    const blob = await P.time(`encode ${format}`, () => format === "heic" ? encodeHeic(out, FW, FH, space, quality) : encodeJpeg(out, FW, FH, space, quality, s.decoded.meta));
     eng.post({ type: "profile", stages: P.stages });
     return { blob, name: `${base}-edit.${format === "heic" ? "heic" : "jpg"}`, ms: performance.now() - t0 };
   } finally {

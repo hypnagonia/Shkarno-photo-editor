@@ -176,6 +176,10 @@ export function hasBlurLayers(layers: Layer[], autoStrength = 1, enable?: { curv
 export function hasMotionLayers(layers: Layer[], autoStrength = 1, enable?: { curves?: boolean; semantic?: boolean }): boolean {
   return liveLayers(layers, autoStrength, enable).some((l) => l.type === "blur" && (l.params as LayerParams["blur"]).amount > 0 && !!(l.params as LayerParams["blur"]).motion && !(l.params as LayerParams["blur"]).object);
 }
+/** The first visible Light Rays layer that adds something. */
+export function raysLayer(layers: Layer[], autoStrength = 1, enable?: { curves?: boolean; semantic?: boolean }): Layer<"rays"> | undefined {
+  return liveLayers(layers, autoStrength, enable).find((l) => l.type === "rays" && (l.params as LayerParams["rays"]).amount > 0) as Layer<"rays"> | undefined;
+}
 /** The first visible Motion Blur layer set to Object (one moving object is smeared per photo), and its index among the live layers. */
 export function objectMotionLayer(layers: Layer[], autoStrength = 1, enable?: { curves?: boolean; semantic?: boolean }): { layer: Layer<"blur">; index: number } | undefined {
   const live = liveLayers(layers, autoStrength, enable);

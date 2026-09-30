@@ -1,5 +1,6 @@
 /** Line icons (24 × 24, stroked with currentColor) shared by the header and the layers editor. */
 export const ICON = {
+  download: "M12 4v11M7 10l5 5 5-5M5 20h14",
   undo: "M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11",
   redo: "m15 14 5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13",
   more: "M5 12h.01M12 12h.01M19 12h.01",
@@ -18,6 +19,8 @@ export const ICON = {
   toneEq: "M5 20v-5M5 11V4M12 20v-9M12 7V4M19 20v-3M19 13V4M3 15h4M10 7h4M17 13h4",
   contrastEq: "M3 12c1.5-6 3-6 4.5 0s3 6 4.5 0 3-6 4.5 0 3 6 4.5 0",
   film: "M4 4h16v16H4zM8 4v16M16 4v16M4 8h4M4 12h4M4 16h4M16 8h4M16 12h4M16 16h4",
+  rays: "M5 5l3 3M12 2v4M19 5l-3 3M9 13l-5 8M12 13v9M15 13l5 8M9.5 10.5a3 3 0 0 1 5 0",
+  frame: "M6 2v16h16M2 6h16v16",
   retouch: "M14.5 4.5l5 5-8.5 8.5H6v-5zM12 7l5 5M4 21c1.5-1 2-2.5 2-3",
   blur: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v2M12 19v2M3 12h2M19 12h2",
   curves: "M4 20C11 20 10 4 20 4M4 4v16h16",

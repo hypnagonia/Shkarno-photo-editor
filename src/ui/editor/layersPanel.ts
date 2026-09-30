@@ -52,6 +52,8 @@ type Ctx = {
   motionGuide?: (b: LayerParams["blur"] | undefined, layer?: number) => void;
   /** The Brush card: the magic brush (src/ui/retouchPanel.ts). */
   retouch?: { el: HTMLElement; render: () => void; leave: () => void };
+  /** The Frame card: crop, straighten, turn, mirror (src/ui/framePanel.ts). */
+  frame?: { el: HTMLElement; render: () => void; leave: () => void };
   /** The Film card: grain, halation, glow (src/ui/filmPanel.ts). */
   film?: { el: HTMLElement; render: () => void; leave: () => void };
   /** Taps on the photo pick what to mask (on, with a hint for the photo) or do what they normally do (off). */
@@ -66,9 +68,9 @@ type Ctx = {
 
 /** Layer types in the ＋ sheet (each type's icon has the type's name). */
 /** The cards that are not layers: always there, at the bottom of the stack. */
-type Fixed = "develop" | "retouch" | "toneEq" | "contrastEq" | "blur" | "film";
+type Fixed = "develop" | "frame" | "retouch" | "toneEq" | "contrastEq" | "blur" | "film";
 
-const ADD: LayerType[] = ["curves", "hueSat", "basic", "blur", "fog", "light", "gradientMap", "gradientFill", "brightContrast", "exposure"];
+const ADD: LayerType[] = ["curves", "hueSat", "basic", "blur", "fog", "light", "rays", "gradientMap", "gradientFill", "brightContrast", "exposure"];
 /** Fog colours: morning air, warm haze, city smog, dusk. */
 const FOG_COLORS = [{ id: "morning", color: "#cfd8e0" }, { id: "warm", color: "#e6d4bb" }, { id: "smog", color: "#b3aa9a" }, { id: "dusk", color: "#6f7d96" }] as const;
 
@@ -164,7 +166,7 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
   }
 
   function renderDock() {
-    list.replaceChildren(...[...layers()].reverse().map((l) => card(l)), card(undefined, "develop"), ...(ctx.retouch ? [card(undefined, "retouch")] : []), ...(ctx.toneEq ? [card(undefined, "toneEq")] : []), ...(ctx.contrastEq ? [card(undefined, "contrastEq")] : []), card(undefined, "blur"), ...(ctx.film ? [card(undefined, "film")] : []));
+    list.replaceChildren(...[...layers()].reverse().map((l) => card(l)), card(undefined, "develop"), ...(ctx.frame ? [card(undefined, "frame")] : []), ...(ctx.retouch ? [card(undefined, "retouch")] : []), ...(ctx.toneEq ? [card(undefined, "toneEq")] : []), ...(ctx.contrastEq ? [card(undefined, "contrastEq")] : []), card(undefined, "blur"), ...(ctx.film ? [card(undefined, "film")] : []));
     list.querySelector(".lay-card.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
@@ -182,6 +184,8 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
       selected = l.id; tab = "adjust"; addSheet.hidden = true;
       ctx.changed(t("hist.new", { name: typeName(type) }));
       render();
+      // Light rays start from the brightest spot (the page's answer comes a moment later).
+      if (type === "rays") void ctx.brightest?.().then((b) => { if (b && ctx.params()?.layers.includes(l)) { Object.assign(l.params, { x: b.x, y: b.y }); ctx.changed(t("rays.moved")); } }).catch(() => {});
     };
     return b;
   }), (() => {
@@ -369,6 +373,17 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
           slider(t("light.reach"), 0.05, 1.5, 0.01, () => g.reach, (v) => (g.reach = v), (v) => `${Math.round(v * 100)}%`, 0.6),
           el("p", { class: "muted", text: t("light.hint") })];
       }
+      case "rays": {
+        const g = l.params as LayerParams["rays"];
+        const key = `rays:${l.id}`;
+        const move = el("button", { class: "btn small" + (placing === key ? " primary" : ""), text: placing === key ? t("rays.tap") : t("rays.move") });
+        move.onclick = () => { setPlacing(placing === key ? undefined : key, t("rays.tap")); renderProps(); };
+        return [el("div", { class: "actions" }, move),
+          slider(t("rays.amount"), 0, 3, 0.01, () => g.amount, (v) => (g.amount = v), pct, 1),
+          slider(t("rays.length"), 0.05, 1, 0.01, () => g.length, (v) => (g.length = v), pct, 0.5),
+          slider(t("rays.threshold"), 0, 0.95, 0.01, () => g.threshold, (v) => (g.threshold = v), pct, 0.6),
+          el("p", { class: "muted", text: t("rays.hint") })];
+      }
       case "brightContrast": {
         const b = l.params as LayerParams["brightContrast"];
         return [slider(t("bc.brightness"), -1, 1, 0.01, () => b.brightness, (v) => (b.brightness = v), pct, 0),
@@ -453,15 +468,25 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
   }
   /** A lens flare waiting for a tap on its light (its set), or none. */
   let placing: string | undefined;
-  function setPlacing(set: string | undefined) {
+  function setPlacing(set: string | undefined, hint = t("flare.tapLight")) {
     placing = set;
     picking = !!set;
-    ctx.pickMode(!!set, t("flare.tapLight"));
+    ctx.pickMode(!!set, hint);
     if (!set) applyMaskView();
   }
   function placeAt(x: number, y: number): boolean {
     const p = ctx.params();
     if (!placing || !p) return false;
+    if (placing.startsWith("rays:")) {
+      // A Light Rays layer's source.
+      const l = p.layers.find((x) => x.id === placing!.slice(5) && x.type === "rays");
+      setPlacing(undefined);
+      if (!l) return false;
+      Object.assign(l.params, { x, y });
+      ctx.changed(t("rays.moved"));
+      render();
+      return true;
+    }
     // The flare is gone (undo, another photo): stop waiting, the tap is an ordinary one.
     if (!flareLight(p.layers, placing)) { setPlacing(undefined); return false; }
     moveFlare(p.layers, placing, { x, y });
@@ -791,12 +816,13 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     const mb = l?.type === "blur" && tab === "adjust" ? (l.params as LayerParams["blur"]) : undefined;
     ctx.motionGuide?.(mb?.motion ? mb : undefined, mb?.motion && l ? liveIndex(l.id) : undefined);
     if (!l) {
-      if (selected !== "blur" && selected !== "toneEq" && selected !== "contrastEq" && selected !== "film" && selected !== "retouch") selected = "develop";
+      if (selected !== "blur" && selected !== "toneEq" && selected !== "contrastEq" && selected !== "film" && selected !== "retouch" && selected !== "frame") selected = "develop";
       if (selected !== "blur") ctx.leftBlur?.();
       if (selected !== "toneEq") ctx.toneEq?.leave();
       if (selected !== "contrastEq") ctx.contrastEq?.leave();
       if (selected !== "retouch") ctx.retouch?.leave();
-      const own = selected === "toneEq" ? ctx.toneEq : selected === "contrastEq" ? ctx.contrastEq : selected === "film" ? ctx.film : selected === "retouch" ? ctx.retouch : undefined;
+      if (selected !== "frame") ctx.frame?.leave();
+      const own = selected === "toneEq" ? ctx.toneEq : selected === "contrastEq" ? ctx.contrastEq : selected === "film" ? ctx.film : selected === "retouch" ? ctx.retouch : selected === "frame" ? ctx.frame : undefined;
       if (own) { props.replaceChildren(own.el); own.render(); }
       else props.replaceChildren(selected === "blur" ? ctx.blur : ctx.develop);
       applyMaskView();
@@ -804,6 +830,7 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     }
     ctx.leftBlur?.();
     ctx.retouch?.leave();
+    ctx.frame?.leave();
     ctx.toneEq?.leave();
     ctx.contrastEq?.leave();
     const name = el("input", { class: "lay-title", value: layerName(l), "aria-label": t("lay.name") });

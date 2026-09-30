@@ -55,6 +55,7 @@ import type { FixChange } from "../analysis/checkFix.ts";
 import { type Post, type Session, type Selections, isMobile } from "./session.ts";
 import { calibrateToCamera } from "./calibration.ts";
 import { dropMotionPlate, ensureMotionPlate } from "./objectMotion.ts";
+import { FULL_CROP, frameSize, frameToSource, isIdentityFrame } from "../geometry/frame.ts";
 import * as openMod from "./open.ts";
 import * as upscaleMod from "./upscale.ts";
 import * as exportMod from "./export.ts";
@@ -76,6 +77,8 @@ export class Engine {
   view: 0 | 1 | 2 | 4 | 5 | 6 | 9 | 11 = 0;
   region = 0;
   before = false;
+  /** The crop is being set: the preview shows the whole turned photo. */
+  framing = false;
   generation = 0;
   profiler = new Profiler();
 
@@ -327,6 +330,14 @@ export class Engine {
     if (s.draft) this.scheduleDraftRelease(s);
     const dof = p.enable.dof && p.dof.strength > 0;
     const r = await this.renderer.render(src, s.maps, p, { wb: this.wbFor(p), gain: s.gain, lightLinear: s.lightLinear, output: "p38", debugView: this.view, region: this.region, zoneRange: this.zoneRange(), draft }, dof);
+    // The frame, last (while the crop is being set: the whole turned photo).
+    const fr = p.frame && (this.framing ? { ...p.frame, crop: FULL_CROP } : p.frame);
+    let shown = { tex: r.tex, top: r.top, w: src.width, h: src.height };
+    if (fr && !isIdentityFrame(fr)) {
+      const [fw, fh] = frameSize(fr, src.width, src.height);
+      shown = { tex: await this.renderer.frame(r.tex, r.top, src.width, src.height, frameToSource(fr, src.width, src.height), fw, fh), top: 0, w: fw, h: fh };
+    }
+    const dims = { width: shown.w, height: shown.h, srcW: src.width, srcH: src.height };
     // Histograms for the curve boxes (the edit as rendered; not for "before" or debug views),
     // computed after the preview is on its way so they never delay it.
     const wantHist = final && !draft && !this.before && this.view === 0;
@@ -334,12 +345,12 @@ export class Engine {
     if (this.display) {
       // Straight onto the page's canvas: no readback, transfer or drawing on the page.
       const { canvas, ctx } = this.display;
-      if (canvas.width !== src.width || canvas.height !== src.height) { canvas.width = src.width; canvas.height = src.height; }
+      if (canvas.width !== shown.w || canvas.height !== shown.h) { canvas.width = shown.w; canvas.height = shown.h; }
       await this.gpu.run("present", (enc) => {
-        enc.copyTextureToTexture({ texture: r.tex, origin: { x: 0, y: r.top } }, { texture: ctx.getCurrentTexture() }, { width: src.width, height: src.height });
+        enc.copyTextureToTexture({ texture: shown.tex, origin: { x: 0, y: shown.top } }, { texture: ctx.getCurrentTexture() }, { width: shown.w, height: shown.h });
       });
       if (!wantHist && !wantCalib) {
-        this.post({ type: "preview", width: src.width, height: src.height, space: "p3", final, ms: performance.now() - t0 });
+        this.post({ type: "preview", ...dims, space: "p3", final, ms: performance.now() - t0 });
         return;
       }
     }
@@ -365,8 +376,12 @@ export class Engine {
     const calib = wantCalib ? renderedQuantiles(new Uint8Array(cdata)) : undefined; // read before `data` is transferred
     const calibHi = wantCalib ? renderedQuantiles(new Uint8Array(cdata), HI_QS) : undefined;
     const oursC = wantCalib && s.calib?.black && !s.calib.color ? chromaStats(new Uint8Array(cdata)) : undefined;
-    if (this.display) this.post({ type: "preview", width: src.width, height: src.height, space: "p3", final, ms: performance.now() - t0 });
-    else this.post({ type: "preview", width: src.width, height: src.height, data, space: "p3", final, ms: performance.now() - t0 }, [data]);
+    if (this.display) this.post({ type: "preview", ...dims, space: "p3", final, ms: performance.now() - t0 });
+    else {
+      // (Framed: the page is sent the framed picture; `data`, the whole photo, fed the histograms above.)
+      const out = shown.tex === r.tex ? data : await this.gpu.readTexture(shown.tex, 0, 0, shown.w, shown.h, 4);
+      this.post({ type: "preview", ...dims, data: out, space: "p3", final, ms: performance.now() - t0 }, [out]);
+    }
     // Calibration to the camera's rendering (calibration.ts).
     if (calib !== undefined && s.calib) calibrateToCamera(this, s, p, calib, calibHi, oursC);
     if (pixels) {

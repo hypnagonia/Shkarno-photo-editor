@@ -1,7 +1,7 @@
 {
-  "name": "Shkarno — photo editor",
+  "name": "Shkarno — RAW photo editor",
   "short_name": "Shkarno",
-  "description": "RAW, ProRAW and HEIC development in the browser. Photos never leave the device.",
+  "description": "Free, private RAW photo editor in the browser: ProRAW, DNG and HEIC developed on your device. Nothing is uploaded.",
   "id": "/",
   "start_url": "/",
   "scope": "/",

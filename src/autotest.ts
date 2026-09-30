@@ -168,6 +168,17 @@ export async function runAutotest(app: AutotestApp) {
         if (q.has("save")) await saveExport(s);
         const p = app.params(); if (p) { p.layers = p.layers.filter((l) => l.name !== `Autotest ${s}`); app.pushParams(); await settle(); }
       }
+      else if (s === "rays") {
+        // A Light Rays layer from the brightest spot (?rays=x,y instead; ?rlen, ?rthr, ?ramount), exported as rays.
+        const at = (q.get("rays") ?? "").split(",").map(Number);
+        const b = at.length === 2 && at.every(Number.isFinite) ? { x: at[0], y: at[1] } : await (async () => {
+          const r = waitFor((m) => m.type === "brightest", "brightest"); app.send({ type: "brightest" }); const m = await r;
+          return m.type === "brightest" ? { x: m.x, y: m.y } : { x: 0.5, y: 0.2 };
+        })();
+        report("rays:source", b);
+        await addLayer("rays", makeLayer("rays", "Autotest rays", { params: { amount: Number(q.get("ramount") ?? 1), length: Number(q.get("rlen") ?? 0.5), threshold: Number(q.get("rthr") ?? 0.6), ...b } }));
+        if (q.has("save")) await saveExport("rays");
+      }
       else if (s.startsWith("film-")) {
         // A film character at full strength on 35 mm (film-clean, film-negative, film-cinema), exported as film-<character>.
         const p = app.params(); if (!p) throw new Error("no photo");
@@ -175,6 +186,16 @@ export async function runAutotest(app: AutotestApp) {
         p.film = { character: s.slice(5) as NonNullable<typeof p.film>["character"], strength: 1, format: 36 };
         app.pushParams(); await done; await settle();
         if (q.has("save")) await saveExport(s);
+      }
+      else if (s === "frame") {
+        // ?frame=quarter;flip;angle;x;y;w;h (a crop well inside: it is not fitted here); exported as frame.
+        const p = app.params(); if (!p) throw new Error("no photo");
+        const [qt, fl, an, ...c] = (q.get("frame") ?? "1;0;5;0.1;0.1;0.8;0.8").split(";").map(Number);
+        const f = { quarter: qt & 3, flip: !!fl, angle: an, crop: c as [number, number, number, number] };
+        p.frame = f;
+        const done = finalPreview("frame"); app.pushParams(); await done; await settle();
+        await report("frame:done", { frame: f });
+        if (q.has("save")) await saveExport("frame");
       }
       else if (s.startsWith("set:")) {
         // One setting by path (set:semantic.person.exposure=0), exported as set-<path>.

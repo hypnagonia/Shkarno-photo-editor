@@ -32,9 +32,10 @@ iPhone ProRAW · DNG · HEIC · JPEG — edited on your device, never uploaded.
 | **Automatic development** | Exposure, tone, white balance and colour set per photo, calibrated to the camera's own rendering. |
 | **AI scene understanding** | Sky, people, vegetation and buildings are recognised, and depth is estimated, for region-aware edits. |
 | **Layers and smart masks** | Curves, colour, gradients and more, masked by subject, region, distance, colour or a single tap. |
-| **Magic brush** | Paint over a person, a wire or a stain and it disappears, filled in from its surroundings. |
-| **Lens and motion blur** | Portrait-style depth of field, and motion blur sideways or into the depth of the scene. |
-| **Fog and light** | Atmospheric fog that thickens with distance; fill light that fades into the scene like a flash. |
+| **Magic brush** | Paint over a person, a wire or a stain and it disappears, filled in from its surroundings. Skin smoothing that keeps eyes and edges sharp. |
+| **Crop and straighten** | Free or fixed proportions (1:1, 4:5, 3:2, 16:9), straightening, rotation and mirroring. |
+| **Lens and motion blur** | Portrait-style depth of field; motion blur sideways, into the depth, or of a moving car, horse or runner streaking past its own outline. |
+| **Fog, light and rays** | Atmospheric fog that thickens with distance; fill light like a flash; light rays streaming from the sun or a lamp. |
 | **Film emulation** | Clean analog, negative film and cinema looks with film grain, halation and bloom. |
 | **Finishing tools** | Tone and contrast equalizers, HDR highlights, dehaze, vignette, denoise and AI 2× upscaling. |
 | **Export** | JPEG, Ultra HDR JPEG, HEIC, 16-bit TIFF and DNG, in Display P3 or sRGB, at full resolution. |

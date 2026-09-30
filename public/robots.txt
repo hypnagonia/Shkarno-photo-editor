@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /models/
+Disallow: /ort/
+
+Sitemap: https://img.jenyadoesapps.com/sitemap.xml

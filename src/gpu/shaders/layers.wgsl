@@ -88,6 +88,8 @@ var<private> lay_blur: f32 = 0.0;
 var<private> lay_motion: vec3<f32> = vec3<f32>(0.0, 0.0, 1.0);
 /** A moving object's mask here (Motion Blur set to Object): render_motion_object.wgsl smears it. */
 var<private> lay_obj: f32 = 0.0;
+/** Where Light Rays layers let the light out (their mask here): render_rays.wgsl streaks it. */
+var<private> lay_rays: f32 = 0.0;
 /** OkLab of the colour before the layers, for colour masks (computed once, on first use). */
 var<private> lay_lab: vec3<f32>;
 var<private> lay_lab_ok: bool = false;
@@ -442,6 +444,8 @@ fn apply_layers(e0: vec3<f32>, g: array<f32, 12>, dist: f32, skin_w: f32, uv: ve
     // Soft region probabilities are rarely exactly 0: below 0.002 a layer moves the
     // pixel by under half a level of 255, so it is skipped (most region layers, most pixels).
     if (w < 2e-3) { continue; }
+    // Light rays: no colour change here; render_rays.wgsl streaks the light where the mask lets it out.
+    if (u32(L.a.x) == 10u) { lay_rays = max(lay_rays, w); continue; }
     // Blur: no colour change here; the blur pass does it, by this amount.
     if (u32(L.a.x) == 7u) {
       if (L.p0.y > 2.5) { lay_obj = max(lay_obj, w); continue; }

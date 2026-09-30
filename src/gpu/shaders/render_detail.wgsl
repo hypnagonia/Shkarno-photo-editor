@@ -6,8 +6,10 @@
 //   Y'      = Y + amount · mult · gate · detail
 //   Y'      clamped to the 3×3 min/max ± a small margin: no overshoot, no halos
 // `mult` is the per-pixel semantic × depth multiplier written by pass 1 (alpha).
+// Negative: skin smoothing there instead, by −mult — an edge-preserving (bilateral) mean
+// of 5 × 5 taps `s.w` px apart: blemishes and pores go, edges of features stay.
 
-struct U { size: vec4<u32>, s: vec4<f32> } // size: W, H, HDR (1: alpha = HDR gain), _; s: amount, radius, threshold, _
+struct U { size: vec4<u32>, s: vec4<f32> } // size: W, H, HDR (1: alpha = HDR gain), _; s: amount, radius, threshold, skin smoothing's tap spacing (px)
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var src: texture_2d<f32>;
 @group(0) @binding(2) var dst: texture_storage_2d<rgba16float, write>;
@@ -27,6 +29,24 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let p = vec2<i32>(id.xy);
   let c = ld(p);
   let mult = c.a;
+  if (mult < -0.001) {
+    let k = min(-mult, 1.0);
+    let y0 = dot(c.rgb, LUMAP3);
+    var acc = vec3<f32>(0.0); var ws = 0.0;
+    for (var dy = -2; dy <= 2; dy++) {
+      for (var dx = -2; dx <= 2; dx++) {
+        let q = ld(p + vec2<i32>(vec2<f32>(f32(dx), f32(dy)) * u.s.w)).rgb;
+        let d = dot(q, LUMAP3) - y0;
+        // Near in brightness counts (a feature's edge does not); farther taps count less.
+        let w = exp(-d * d / (2.0 * 0.05 * 0.05)) * exp(-f32(dx * dx + dy * dy) / 8.0);
+        acc += w * q; ws += w;
+      }
+    }
+    let sm = acc / max(ws, 1e-4);
+    // A little of the fine texture stays (skin, not plastic).
+    textureStore(dst, p, vec4<f32>(clamp(mix(c.rgb, sm, 0.85 * k), vec3<f32>(0.0), vec3<f32>(1.0)), alpha_at(p)));
+    return;
+  }
   let amount = u.s.x * mult;
   if (amount <= 0.001) { textureStore(dst, p, vec4<f32>(c.rgb, alpha_at(p))); return; }
   let sigma = max(u.s.y, 0.4);

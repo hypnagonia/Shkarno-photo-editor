@@ -43,7 +43,9 @@ fn at(c: vec2<f32>, t: f32) -> vec2<f32> {
 }
 fn mask_at(p: vec2<f32>) -> f32 {
   let lim = vec2<i32>(i32(u.size.x) - 1, i32(u.size.y) - 1);
-  return clamp(textureLoad(motion, clamp(vec2<i32>(floor(p)), vec2<i32>(0), lim), 0).w, 0.0, 1.0);
+  // (w holds the object's mask in its low 5 bits: render_tone.wgsl.)
+  let w = textureLoad(motion, clamp(vec2<i32>(floor(p)), vec2<i32>(0), lim), 0).w;
+  return (w - 32.0 * floor(w / 32.0)) / 31.0;
 }
 
 @compute @workgroup_size(8, 8)

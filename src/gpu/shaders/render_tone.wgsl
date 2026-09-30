@@ -33,7 +33,7 @@ struct U {
   wb: mat3x3<f32>,
   a: vec4<f32>,             // exposure EV, gain k, denoise luma, denoise chroma
   b: vec4<f32>,             // shadow boost, dehaze strength, dehaze beta, dehaze min t
-  light: vec4<f32>,         // atmospheric light (linear working), _
+  light: vec4<f32>,         // atmospheric light (linear working), skin smoothing 0…1
   local: vec4<f32>,         // compression, clarity, texture, anchor EV
   tone: vec4<f32>,          // shadows, highlights, depth near mult, depth far mult
   color: vec4<f32>,         // saturation, vibrance, look strength, look size
@@ -847,6 +847,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (u.flags.w == 8u) { e = e_pre; }
   var sharpen = sem.sharpen * mix(u.tone.z, u.tone.w, smoothstep(0.1, 0.9, dist));
   if ((flags & EN_SHARPEN) == 0u || u.flags.w >= 7u) { sharpen = 0.0; }
+  // Skin smoothing: a negative multiplier tells the detail pass to smooth here instead.
+  let smooth_skin = u.light.w * smoothstep(0.08, 0.5, skin_w);
+  if (smooth_skin > 0.01 && u.flags.w < 7u) { sharpen = -smooth_skin; }
   textureStore(dst, tp, vec4<f32>(e, sharpen));
   // Distance (0…1) for the blur pass, with Blur layers' amount packed above it:
   // + 2 × amount in thousandths (decoded in render_dof.wgsl's coc_pass).
@@ -862,5 +865,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     bd = mix(dist, u.hl.w, pw);
   }
   textureStore(dist_out, tp, vec4<f32>(bd + 2.0 * round(clamp(lay_blur, 0.0, 4.0) * 1000.0), 0.0, 0.0, 0.0));
-  textureStore(motion_out, tp, vec4<f32>(lay_motion, lay_obj));
+  // (w: a moving object's mask and the light rays' mask, 5 bits each — integers f16 holds exactly.)
+  textureStore(motion_out, tp, vec4<f32>(lay_motion, round(clamp(lay_obj, 0.0, 1.0) * 31.0) + 32.0 * round(clamp(lay_rays, 0.0, 1.0) * 31.0)));
 }

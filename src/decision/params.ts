@@ -4,6 +4,7 @@
  * them). Everything here is plain data so that it can be logged, diffed,
  * edited in the UI and serialised with an export.
  */
+import type { Frame } from "../geometry/frame.ts";
 import type { ToneEq } from "../tone/toneEq.ts";
 import type { ContrastEq } from "../tone/contrastEq.ts";
 import { GROUPS, type Group } from "../neural/scene.ts";
@@ -186,6 +187,18 @@ export interface Params {
    * share of its long side. The fills are derived (rebuilt from the strokes after a reload).
    */
   retouch?: RetouchStroke[];
+  /**
+   * The frame (src/geometry/frame.ts): quarter turns, a mirror, straightening, the crop —
+   * applied last, to the finished picture (masks, taps and strokes stay in the photo's own
+   * coordinates). Absent = the whole photo as it is.
+   */
+  frame?: Frame;
+  /**
+   * Skin smoothing 0…1 (the Brush card): on skin (the skin weight of the tone pass), an
+   * edge-preserving blur over ≈ 0.3 % of the long side instead of sharpening — blemishes
+   * and pores softened, features kept (render_detail.wgsl). Absent = off.
+   */
+  skinSmooth?: number;
   /** Tone equalizer (src/tone/toneEq.ts): exposure by brightness zone of a smoothed mask. Absent = off. */
   toneEq?: ToneEq;
   /**

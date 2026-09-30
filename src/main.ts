@@ -8,6 +8,8 @@ import { createToneEqPanel } from "./ui/toneEqPanel.ts";
 import { createContrastEqPanel } from "./ui/contrastEqPanel.ts";
 import { createFilmPanel } from "./ui/filmPanel.ts";
 import { createRetouchPanel } from "./ui/retouchPanel.ts";
+import { createFramePanel } from "./ui/framePanel.ts";
+import { FULL_CROP, applyAffine, frameToSource, invertAffine, isIdentityFrame, type Frame } from "./geometry/frame.ts";
 import { keepRuntimeWhenIdle } from "./pwa.ts";
 import logoSvg from "../public/logo.svg?raw";
 import { motionArrows } from "./layers/motion.ts";
@@ -110,11 +112,10 @@ function strokeDone() {
 }
 function drawStroke(pts: Array<[number, number]> | undefined) {
   if (!pts?.length) { brushSvg.replaceChildren(); return; }
-  const r = imageRect(), st = stage.getBoundingClientRect();
-  const X = (x: number) => r.left - st.left + x * r.width, Y = (y: number) => r.top - st.top + y * r.height;
   const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  p.setAttribute("d", pts.map(([x, y], i) => `${i ? "L" : "M"}${X(x)} ${Y(y)}`).join("") + (pts.length === 1 ? `L${X(pts[0][0]) + 0.01} ${Y(pts[0][1])}` : ""));
-  p.setAttribute("stroke-width", String(2 * brush.radius * Math.max(r.width, r.height)));
+  const at = pts.map(([x, y]) => stageAt(x, y));
+  p.setAttribute("d", at.map(([x, y], i) => `${i ? "L" : "M"}${x} ${y}`).join("") + (at.length === 1 ? `L${at[0][0] + 0.01} ${at[0][1]}` : ""));
+  p.setAttribute("stroke-width", String(2 * brush.radius * photoLongPx()));
   brushSvg.replaceChildren(p);
 }
 
@@ -142,7 +143,7 @@ function addPane(id: string, _label?: string) {
   return p;
 }
 // "More": information, export settings, upscaling, history and debugging, in one overlay.
-const MORE = ["check", "auto", "history", "export", "upscale", "debug"] as const;
+const MORE = ["auto", "history", "export", "upscale", "check", "debug"] as const;
 const moreEl = el("div", { class: "more", hidden: "" });
 const moreTabs = el("div", { class: "seg" });
 const moreBody = el("div", { class: "pane" });
@@ -152,7 +153,7 @@ moreClose.onclick = () => (moreEl.hidden = true);
 moreEl.onclick = (e) => { if (e.target === moreEl) moreEl.hidden = true; }; // tap outside closes
 moreEl.append(el("div", { class: "more-head" }, moreTabs, themePill, langPill, moreClose), moreBody);
 app.append(moreEl);
-let moreId: (typeof MORE)[number] = "check";
+let moreId: (typeof MORE)[number] = "auto";
 function showPane(id: string) {
   if ((MORE as readonly string[]).includes(id)) {
     moreId = id as (typeof MORE)[number];
@@ -163,7 +164,6 @@ function showPane(id: string) {
       return b;
     }));
     if (moreId === "history") renderHistory();
-    if (moreId === "check" && checkStale) runCheck();
     moreBody.replaceChildren(panes[moreId]);
   }
 }
@@ -294,7 +294,8 @@ fsExit.onclick = (e) => { e.stopPropagation(); setFullscreen(false); };
 document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement) document.body.classList.remove("fs"); });
 header.insertBefore(fsBtn, capsEl);
 // Export in one tap, with the Export tab's current settings (format, colour, quality).
-const exportTop = el("button", { class: "btn small primary push", text: t("app.export") });
+const exportTop = el("button", { class: "btn small icon primary push export-top", title: t("app.export"), "aria-label": t("app.export") });
+exportTop.append(icon("download"));
 exportTop.onclick = () => exportBtn.click();
 exportTop.disabled = true; // until a photo is open
 header.insertBefore(exportTop, fsBtn);
@@ -314,7 +315,17 @@ checkBtn.append(checkBadge);
 checkBtn.onclick = () => (!moreEl.hidden && moreId === "check" ? (moreEl.hidden = true) : showPane("check"));
 header.insertBefore(undoBtn, exportTop);
 header.insertBefore(redoBtn, exportTop);
-header.append(checkBtn, moreBtn);
+// The project on GitHub and its author on LinkedIn (filled marks, as the brands draw them).
+const extLink = (href: string, label: string, path: string) => {
+  const a = el("a", { class: "btn small icon ghost ext", href, target: "_blank", rel: "noopener", title: label, "aria-label": label });
+  a.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="${path}"/></svg>`;
+  return a;
+};
+const githubLink = extLink("https://github.com/hypnagonia/Shkarno-photo-editor", "GitHub",
+  "M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z");
+const linkedinLink = extLink("https://www.linkedin.com/in/zunso/", "LinkedIn",
+  "M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.35V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 1 1 0-4.13 2.06 2.06 0 0 1 0 4.13zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.22 0z");
+header.append(githubLink, linkedinLink, moreBtn);
 undoBtn.disabled = redoBtn.disabled = true;
 stage.append(fsExit);
 
@@ -484,6 +495,7 @@ function takeCanvasBack() {
 const scratch = document.createElement("canvas");
 const scratchCtx = (() => { try { return scratch.getContext("2d", { colorSpace: "display-p3" }); } catch { return null; } })() ?? scratch.getContext("2d")!;
 function drawPreview(m: Extract<FromWorker, { type: "preview" }>) {
+  if (m.srcW && m.srcH) { srcW = m.srcW; srcH = m.srcH; }
   if (!m.data) {
     // Already on the canvas (GPU display): only its size is news here.
     shownW = m.width; shownH = m.height;
@@ -506,6 +518,43 @@ function drawPreview(m: Extract<FromWorker, { type: "preview" }>) {
     ctx().putImageData(img, 0, 0);
   }
   renderRings();
+}
+
+/** The photo's proportions before the frame (from the preview), and whether the crop is being set. */
+let srcW = 0, srcH = 0, framing = false;
+/** Redraws the crop being set (the Frame card's, once it exists). */
+let drawCrop = () => {};
+/** The frame the preview shows now: while the crop is being set, the whole turned photo. */
+function shownFrame(): Frame | undefined {
+  const f = params?.frame;
+  if (!f || !srcW) return undefined;
+  const g = framing ? { ...f, crop: FULL_CROP } : f;
+  return isIdentityFrame(g) ? undefined : g;
+}
+/** A point of the preview (0…1) → the photo (0…1), through the frame. */
+function toSource(u: number, v: number): [number, number] {
+  const f = shownFrame();
+  return f ? applyAffine(frameToSource(f, srcW, srcH), u, v) : [u, v];
+}
+/** A point of the photo (0…1) → the preview (0…1). */
+function toView(x: number, y: number): [number, number] {
+  const f = shownFrame();
+  return f ? applyAffine(invertAffine(frameToSource(f, srcW, srcH)), x, y) : [x, y];
+}
+/** The photo point (0…1) under a screen point. */
+function photoAt(clientX: number, clientY: number): [number, number] {
+  const r = imageRect();
+  return toSource((clientX - r.left) / r.width, (clientY - r.top) / r.height);
+}
+/** A photo point (0…1) in the stage's px. */
+function stageAt(x: number, y: number): [number, number] {
+  const r = imageRect(), st = stage.getBoundingClientRect(), [u, v] = toView(x, y);
+  return [r.left - st.left + u * r.width, r.top - st.top + v * r.height];
+}
+/** The photo's long side, in screen px (the frame can zoom it). */
+function photoLongPx(): number {
+  const [x0, y0] = stageAt(0, 0), [x1, y1] = stageAt(1, 0), [x2, y2] = stageAt(0, 1);
+  return Math.max(Math.hypot(x1 - x0, y1 - y0), Math.hypot(x2 - x0, y2 - y0));
 }
 
 /** On-screen rectangle of the photo inside the letterboxed canvas (object-fit: contain). */
@@ -571,10 +620,16 @@ function renderMotionGuide() {
   const ns = "http://www.w3.org/2000/svg";
   const g = document.createElementNS(ns, "g");
   let d = "";
-  for (const a of motionArrows(b, motionField, cols, rows, r.width / r.height)) {
-    const L = Math.min(a.len * long, cell * 0.9);
+  for (const a of motionArrows(b, motionField, cols, rows, srcW && srcH ? srcW / srcH : r.width / r.height)) {
+    // Through the frame: where the arrow is on the preview, and which way it points there.
+    const [u, v] = toView(a.x, a.y);
+    if (u < 0 || v < 0 || u > 1 || v > 1) continue;
+    const [cx, cy] = stageAt(a.x, a.y), sl = Math.max(srcW, srcH) || 1;
+    const [qx, qy] = stageAt(a.x + (1e-3 * a.dx * sl) / (srcW || 1), a.y + (1e-3 * a.dy * sl) / (srcH || 1));
+    const qd = Math.hypot(qx - cx, qy - cy) || 1;
+    a.dx = (qx - cx) / qd; a.dy = (qy - cy) / qd;
+    const L = Math.min(a.len * (shownFrame() ? photoLongPx() : long), cell * 0.9);
     if (L < 3) continue;
-    const cx = r.left - st.left + a.x * r.width, cy = r.top - st.top + a.y * r.height;
     const x0 = cx - (a.dx * L) / 2, y0 = cy - (a.dy * L) / 2, x1 = cx + (a.dx * L) / 2, y1 = cy + (a.dy * L) / 2;
     const h = Math.min(7, L * 0.35), px = -a.dy, py = a.dx;
     const head = (x: number, y: number, s: number) => `M${x - s * a.dx * h + px * h * 0.6} ${y - s * a.dy * h + py * h * 0.6}L${x} ${y}L${x - s * a.dx * h - px * h * 0.6} ${y - s * a.dy * h - py * h * 0.6}`;
@@ -590,14 +645,15 @@ function renderMotionGuide() {
 
 function renderRings() {
   renderMotionGuide();
+  drawCrop();
   // Rings are an editing aid: only shown while picking focus points.
   const pts = shownFocusPoints();
   if (!pts.length && !rings.childElementCount) return; // nothing to draw: no layout reads (pinch / pan call this per move)
-  const r = imageRect(), st = stage.getBoundingClientRect();
   rings.replaceChildren(...pts.map((p, i) => {
     const d = el("div", { class: "focus-ring" + (p.auto ? " auto" : "") + (drag?.index === i ? " drag" : ""), text: p.auto ? t("view.ringAuto") : String(i + 1) });
-    d.style.left = `${r.left - st.left + p.x * r.width}px`;
-    d.style.top = `${r.top - st.top + p.y * r.height}px`;
+    const [sx, sy] = stageAt(p.x, p.y);
+    d.style.left = `${sx}px`;
+    d.style.top = `${sy}px`;
     return d;
   }));
 }
@@ -697,16 +753,14 @@ stage.addEventListener("pointerdown", (e) => {
   press = { x0: e.clientX, y0: e.clientY, px0: panX, py0: panY, moved: false };
   if (brush.on) {
     // Magic brush: one finger paints (no pan, no hold-to-compare).
-    const r = imageRect();
-    const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    const [x, y] = photoAt(e.clientX, e.clientY);
     if (x >= 0 && y >= 0 && x <= 1 && y <= 1 && !strokeShown) { stroke = { pts: [[x, y]], last: { x: e.clientX, y: e.clientY } }; drawStroke(stroke.pts); }
     press = undefined;
     return;
   }
   if (maskPicking || toneEqPicking) {
     // A pick happens on release (a pan or a pinch picks nothing).
-    const r = imageRect();
-    const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    const [x, y] = photoAt(e.clientX, e.clientY);
     if (x >= 0 && y >= 0 && x <= 1 && y <= 1) press.tap = { x, y };
     // Tone equalizer: a tap finds the zone; holding shows the photo without the equalizer.
     if (toneEqPicking && params?.toneEq) {
@@ -719,8 +773,7 @@ stage.addEventListener("pointerdown", (e) => {
     return;
   }
   if (focusMode) {
-    const r = imageRect();
-    const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    const [x, y] = photoAt(e.clientX, e.clientY);
     if (x < 0 || y < 0 || x > 1 || y > 1) return;
     // On a ring: drag moves it, a tap removes it. Elsewhere: a new point, on release
     // (so a pan or a pinch does not add one).
@@ -763,16 +816,16 @@ stage.addEventListener("pointermove", (e) => {
   if (stroke) {
     // A point every few screen pixels.
     if (Math.hypot(e.clientX - stroke.last.x, e.clientY - stroke.last.y) < 3) return;
-    const r = imageRect();
-    stroke.pts.push([clamp01((e.clientX - r.left) / r.width), clamp01((e.clientY - r.top) / r.height)]);
+    const [x, y] = photoAt(e.clientX, e.clientY);
+    stroke.pts.push([clamp01(x), clamp01(y)]);
     stroke.last = { x: e.clientX, y: e.clientY };
     drawStroke(stroke.pts);
     return;
   }
   if (drag && params) {
-    const r = imageRect();
-    drag.x = clamp01((e.clientX - r.left) / r.width);
-    drag.y = clamp01((e.clientY - r.top) / r.height);
+    const [x, y] = photoAt(e.clientX, e.clientY);
+    drag.x = clamp01(x);
+    drag.y = clamp01(y);
     if (Math.hypot(drag.x - drag.x0, drag.y - drag.y0) > 0.01) drag.moved = true;
     if (drag.moved) renderRings();
     return;
@@ -1205,6 +1258,15 @@ const retouchPanel = createRetouchPanel({
   changed: (label) => { nextLabel = label; pushParams(); },
   brush,
 });
+const framePanel = createFramePanel({
+  params: () => params,
+  changed: (label) => { nextLabel = label; pushParams(); },
+  srcSize: () => [srcW || 1, srcH || 1],
+  framing: (on) => { if (framing === on) return; framing = on; send({ type: "framing", on }); renderRings(); },
+  imageRect,
+  stage,
+});
+drawCrop = framePanel.draw;
 const filmPanel = createFilmPanel({
   params: () => params,
   changed: (label) => { nextLabel = label; pushParams(); },
@@ -1226,6 +1288,7 @@ const layersPanel = createLayersPanel(dockEl, propsEl, {
   contrastEq: contrastEqTab,
   film: filmPanel,
   retouch: retouchPanel,
+  frame: framePanel,
   motionGuide: setMotionGuide,
   photoColors: () => askEngine({ type: "palette" }, (m) => (m.type === "palette" ? m.stats.palette.map((w) => w.hex) : undefined), [] as string[]),
   notice: (text) => { badge.textContent = text; badge.classList.add("on"); },
@@ -1499,7 +1562,6 @@ function checkFixEl(it: CheckItem): HTMLElement {
     nextLabel = t("check.applied", { what: t(`check.t.${it.id}`) });
     syncControls();
     pushParams();
-    setTimeout(runCheck, 80); // after the new settings reach the engine
   };
   box.append(el("span", { text: (it.fixPartial ? t("check.fixPartial") : t("check.fixSet")) + " " + lines.join(" · ") }), apply);
   return box;

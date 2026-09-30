@@ -11,9 +11,9 @@
 import type { CurvePoint, Curves, DepthBand, Region } from "../decision/params.ts";
 import { presetGradient, type Gradient } from "./gradient.ts";
 
-export type LayerType = "curves" | "hueSat" | "brightContrast" | "exposure" | "basic" | "gradientMap" | "gradientFill" | "blur" | "fog" | "light";
+export type LayerType = "curves" | "hueSat" | "brightContrast" | "exposure" | "basic" | "gradientMap" | "gradientFill" | "blur" | "fog" | "light" | "rays";
 /** GPU type index = position here (layers.wgsl). */
-export const LAYER_TYPES: LayerType[] = ["curves", "hueSat", "brightContrast", "exposure", "basic", "gradientMap", "gradientFill", "blur", "fog", "light"];
+export const LAYER_TYPES: LayerType[] = ["curves", "hueSat", "brightContrast", "exposure", "basic", "gradientMap", "gradientFill", "blur", "fog", "light", "rays"];
 
 export type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "softLight" | "hardLight" | "darken" | "lighten"
   | "hue" | "saturation" | "color" | "luminosity"
@@ -162,6 +162,13 @@ export interface LayerParams {
    * carries (beyond 1 the far distance is lit too). Highlights roll off into white.
    */
   light: { amount: number; reach: number };
+  /**
+   * Light rays (god rays): the bright parts the mask lets out — above `threshold`
+   * (display brightness 0…1) — streaked away from the light at `x`, `y` (0…1 of the photo;
+   * a new layer starts at the brightest spot), over `length` (0…1) of the way to it, added
+   * by `amount` 0…3. The first visible one counts (render_rays.wgsl).
+   */
+  rays: { amount: number; length: number; threshold: number; x: number; y: number };
 }
 
 export interface Layer<T extends LayerType = LayerType> {
@@ -198,6 +205,7 @@ export function defaultParams<T extends LayerType>(type: T): LayerParams[T] {
     blur: { amount: 0.4 },
     fog: { amount: 0.5, start: 0.45, color: "#cfd8e0" },
     light: { amount: 1, reach: 0.6 },
+    rays: { amount: 1, length: 0.5, threshold: 0.6, x: 0.5, y: 0.25 },
   };
   return structuredClone(d[type]) as LayerParams[T];
 }
@@ -226,6 +234,7 @@ export function isNeutralLayer(l: Layer): boolean {
     case "blur": return (l.params as LayerParams["blur"]).amount < 1e-4;
     case "fog": return (l.params as LayerParams["fog"]).amount < 1e-4;
     case "light": return Math.abs((l.params as LayerParams["light"]).amount) < 1e-4;
+    case "rays": return (l.params as LayerParams["rays"]).amount < 1e-4;
   }
   return false;
 }

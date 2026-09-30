@@ -17,6 +17,7 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
   // Cheap, idempotent messages are handled immediately; heavy ones are serialised.
   if (m.type === "params") { engine.setParams(m.params, m.draft); return; }
   if (m.type === "view") { engine.setView(m.view, m.before, m.region, m.range); return; }
+  if (m.type === "framing") { engine.framing = m.on; engine.requestRender(true); return; }
   if (m.type === "preview-size") { engine.setPreviewSize(m.long); return; }
   if (m.type === "canvas") { engine.setCanvas(m.canvas); return; }
   // A new photo stops the open still running (it would otherwise finish first, in the queue).
