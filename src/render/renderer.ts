@@ -23,6 +23,7 @@ import outputWgsl from "../gpu/shaders/output.wgsl?raw";
 import grainWgsl from "../gpu/shaders/render_grain.wgsl?raw";
 import filmWgsl from "../gpu/shaders/render_film.wgsl?raw";
 import motionWgsl from "../gpu/shaders/render_motion.wgsl?raw";
+import { OBJECT_ZOOM } from "../layers/motion.ts";
 import motionObjectWgsl from "../gpu/shaders/render_motion_object.wgsl?raw";
 import filmGlowWgsl from "../gpu/shaders/film_glow.wgsl?raw";
 import { filmOf, filmUniforms } from "../film/film.ts";
@@ -374,7 +375,13 @@ export class Renderer {
     const motionMax = motionR * 1.6 * Math.max(0, ...(p.layers ?? []).filter((l) => l.type === "blur" && (l.params as { motion?: boolean }).motion).map((l) => (l.params as { amount: number }).amount));
     // A moving object (Motion Blur set to Object): its streak, the same 6 % at amount 1, one way at most.
     const obj = ((o.debugView ?? 0) < 7 || o.debugView === 11) ? objectMotionLayer(p.layers ?? [], p.autoCurves ?? 1, p.enable) : undefined;
-    const objL = obj ? obj.layer.params.amount * 0.06 * Math.max(W, H) : 0;
+    const objB = obj?.layer.params;
+    // Along the depth: a scale about the vanishing point (px), its widest shift where the frame is farthest from it.
+    const objV = objB?.depth ? [(objB.vanish ?? this.vanishing)[0] * W, (objB.vanish ?? this.vanishing)[1] * H] : undefined;
+    const objZ = objB ? objB.amount * OBJECT_ZOOM : 0;
+    const objL = !objB ? 0 : objV
+      ? Math.max(...[[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => Math.hypot(x - objV[0], y - objV[1]))) * (Math.exp(objZ) - 1)
+      : objB.amount * 0.06 * Math.max(W, H);
     const maxRadius = depthDof ? p.dof.strength * 0.022 * Math.max(W, H) : 0;
     const y0 = strip?.y0 ?? 0, rows = strip?.rows ?? H;
     const ceqOn = contrastEqActive(p.contrastEq) && (o.debugView ?? 0) < 7;
@@ -432,8 +439,10 @@ export class Renderer {
       const accA = this.target("objA", W, th, "rgba16float"), accB = this.target("objB", W, th, "rgba16float");
       const out = final === t1 ? t2 : t1;
       const plateTex = pl?.tex ?? this.target("plateDummy", 1, 1, "rgba8unorm");
+      const dir = objV ? [objV[0], objV[1] - ty0] : [Math.cos(ang), -Math.sin(ang)], span = objV ? objZ : objL;
       const uni = (pass: number) => new Uniforms(16).u32(W, th, finalLinear ? 1 : 0, pass)
-        .f32(Math.cos(ang), -Math.sin(ang), (-0.5 + 0.5 * trail) * objL, (0.5 + 0.5 * trail) * objL).f32(...rect).f32(b.sharp ?? 0, 0, 0, 0).bytes();
+        .f32(dir[0], dir[1], (-0.5 + 0.5 * trail) * span, (0.5 + 0.5 * trail) * span).f32(...rect)
+        .f32(b.sharp ?? 0, objV ? 1 : 0, b.arriving ? 1 : -1, 0).bytes();
       await gpu.run("render.motionObject", (enc, temp) => {
         const u0 = gpu.uniform(uni(0), "motionObj.u"), u1 = gpu.uniform(uni(1), "motionObj.u");
         temp.push(u0, u1);

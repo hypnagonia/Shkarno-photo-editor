@@ -144,9 +144,11 @@ export interface LayerParams {
    * `object`: the mask is a moving object (a vehicle, a horse, a runner), not the scene —
    * it is smeared along `angle` (its travel direction) past its own outline over the
    * background, which the engine inpaints where the object was; `trail` 0 (streaked
-   * both ways) … 1 (all behind it), `sharp` 0…1 the object itself sharp on top.
+   * both ways) … 1 (all behind it), `sharp` 0…1 the object itself sharp on top. With
+   * `depth`, it moves along the depth instead of `angle`: into it, or toward the camera
+   * (`arriving`) — a scale about `vanish`.
    */
-  blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean; through?: boolean; vanish?: [number, number]; range?: [number, number]; reach?: number; falloff?: number; object?: boolean; trail?: number; sharp?: number };
+  blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean; through?: boolean; vanish?: [number, number]; range?: [number, number]; reach?: number; falloff?: number; object?: boolean; trail?: number; sharp?: number; arriving?: boolean };
   /**
    * Fog: air thickening with distance (the depth map) — from `start` (0 = the nearest,
    * 1 = the farthest) on, toward `color` (hex), by the real distance through the air

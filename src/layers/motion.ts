@@ -7,6 +7,8 @@ import type { LayerParams } from "./model.ts";
 
 /** A streak at amount 1 is this share of the picture's long side. */
 export const MOTION_STREAK = 0.06;
+/** A moving object along the depth: its scale changes by this much (log) over the streak at amount 1. */
+export const OBJECT_ZOOM = 0.2;
 /** Into the depth, how the deep end streaks when the layer does not say: more than the near. */
 export const DEFAULT_FALLOFF = 0.5;
 
@@ -51,7 +53,17 @@ export function motionArrows(b: LayerParams["blur"], depth: { w: number; h: numb
     }
     // Into the depth: ∝ r / Z within the part (as layers.wgsl).
     let len = b.amount * MOTION_STREAK;
-    if (b.object) { out.push({ x, y, dx, dy, len }); continue; } // (a moving object: one direction, one length)
+    if (b.object) {
+      // A moving object: one direction, one length — or, along the depth, toward the
+      // vanishing point (receding) or away from it (arriving), ∝ the distance from it.
+      if (b.depth) {
+        const r = Math.hypot((x - vanish[0]) * aspect, y - vanish[1]);
+        len = b.amount * OBJECT_ZOOM * r / Math.max(1, aspect);
+        if (!b.arriving) { dx = -dx; dy = -dy; }
+      }
+      out.push({ x, y, dx, dy, len });
+      continue;
+    }
     if (b.depth) {
       const rg = b.range ?? [0, 1];
       const rel = Math.min(1, Math.max(0, (d - rg[0]) / Math.max(rg[1] - rg[0], 0.05)));

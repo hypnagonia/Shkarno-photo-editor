@@ -333,9 +333,17 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
         const b = l.params as LayerParams["blur"];
         return [chips([{ id: "lens", label: t("blurl.lens") }, { id: "motion", label: t("blurl.motion") }] as const, b.motion ? "motion" : "lens", (v) => { b.motion = v === "motion"; edit(); renderProps(); }),
           slider(t("blurl.amount"), 0, b.motion ? 3 : 1, 0.01, () => b.amount, (v) => { b.amount = v; ctx.motionGuide?.(b); }, (v) => `${Math.round(v * 100)}%`, 0.4),
-          ...(b.motion ? [chips([{ id: "scene", label: t("blurl.scene") }, { id: "object", label: t("blurl.object") }] as const, b.object ? "object" : "scene", (v) => { b.object = v === "object"; edit(); renderProps(); })] : []),
+          ...(b.motion ? [chips([{ id: "scene", label: t("blurl.scene") }, { id: "object", label: t("blurl.object") }] as const, b.object ? "object" : "scene", (v) => {
+            b.object = v === "object";
+            // An object that spans depth (its mask from near to far) moves along it, to begin with.
+            if (b.object && b.range && b.range[1] - b.range[0] > 0.15) b.depth = true;
+            edit(); renderProps();
+          })] : []),
           ...(b.motion && b.object ? [
-            angleRow(t("blurl.travel"), () => b.angle ?? 0, (v) => { b.angle = v; ctx.motionGuide?.(b); }, true),
+            toggleRow(t("blurl.objDepth"), t("blurl.objDepthNote"), () => !!b.depth, (v) => { b.depth = v; renderProps(); ctx.motionGuide?.(b); }),
+            b.depth
+              ? chips([{ id: "away", label: t("blurl.away") }, { id: "arriving", label: t("blurl.arriving") }] as const, b.arriving ? "arriving" : "away", (v) => { b.arriving = v === "arriving"; edit(); renderProps(); ctx.motionGuide?.(b); })
+              : angleRow(t("blurl.travel"), () => b.angle ?? 0, (v) => { b.angle = v; ctx.motionGuide?.(b); }, true),
             slider(t("blurl.trail"), 0, 1, 0.01, () => b.trail ?? 0.6, (v) => (b.trail = v), (v) => `${Math.round(v * 100)}%`, 0.6),
             slider(t("blurl.sharp"), 0, 1, 0.01, () => b.sharp ?? 0, (v) => (b.sharp = v), (v) => `${Math.round(v * 100)}%`, 0),
           ] : []),

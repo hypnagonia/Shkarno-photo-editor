@@ -254,7 +254,19 @@ export async function runAutotest(app: AutotestApp) {
         // ?region=vehicle: a region of the segmentation instead of a tapped object.
         const rg = q.get("region");
         const at = rg ? { kind: "region" as const, region: rg as "vehicle", invert: false, feather: 1, density: 1 } : pk.length === 2 && pk.every(Number.isFinite) ? { ...center, points: pts.map((p) => [p[0], p[1], 1]) as Array<[number, number, 0 | 1]> } : center;
-        await addLayer("motion", makeLayer("blur", "Autotest motion", { mask: { ...at, invert: !q.has("keep") }, params: { amount: Number(q.get("amount") ?? 0.6), motion: true, angle: Number(q.get("angle") ?? 0), depth: q.has("parallax"), through: q.has("through"), object: q.has("object"), trail: Number(q.get("trail") ?? 0.6), sharp: Number(q.get("sharp") ?? 0) } }));
+        await addLayer("motion", makeLayer("blur", "Autotest motion", { mask: { ...at, invert: !q.has("keep") }, params: { amount: Number(q.get("amount") ?? 0.6), motion: true, angle: Number(q.get("angle") ?? 0), depth: q.has("parallax"), through: q.has("through"), object: q.has("object"), trail: Number(q.get("trail") ?? 0.6), sharp: Number(q.get("sharp") ?? 0), arriving: q.has("arriving") } }));
+        if (q.has("parallax")) {
+          // Where its mask recedes, as the layer's panel sets it (the render's fallback is the photo's).
+          const p = app.params(), l = p?.layers.at(-1);
+          const f = waitFor((m) => m.type === "motionField", "motionField");
+          app.send({ type: "motionField", layer: (p?.layers.length ?? 1) - 1 });
+          const m = await f;
+          if (p && l && m.type === "motionField" && m.vanish) {
+            Object.assign(l.params, { vanish: m.vanish, range: m.range, reach: m.reach });
+            report("motion:vanish", { vanish: m.vanish, range: m.range });
+            const done = finalPreview("motion vanish"); app.pushParams(); await done; await settle();
+          }
+        }
         if (q.has("save")) await saveExport("motion");
       }
       else if (s === "export") {

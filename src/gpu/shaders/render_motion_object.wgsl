@@ -11,13 +11,18 @@
 //   composite       smeared object over the background (the plate inside the outline),
 //                   the sharp object on top by `sharp` (a rear-curtain flash look)
 //
+// Along the depth (k.y = 1): the object moves toward the point where its mask recedes, or
+// away from it — as a scale about that point, never reversed (a zoom blur of the object):
+// its nearer parts streak longer, in the picture's perspective.
+//
 // In linear light, as the scene motion blur (render_motion.wgsl).
 
 struct U {
   size: vec4<u32>,  // W, H of this texture, input is linear, pass (0, 1)
-  d: vec4<f32>,     // travel direction (unit, screen y down), window start a, end b (px)
+  d: vec4<f32>,     // travel direction (unit, screen y down), window start a, end b (px);
+                    // along the depth: the vanishing point (px), window a, b (log scale)
   plate: vec4<f32>, // the plate's rectangle in this texture's px (x0, y0, x1, y1); empty = none
-  k: vec4<f32>,     // sharp object on top 0…1, _, _, _
+  k: vec4<f32>,     // sharp object on top 0…1, along the depth (1), toward (−1) or away from (+1) it, _
 }
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var src: texture_2d<f32>;
@@ -31,6 +36,11 @@ fn lin_of(c: vec3<f32>) -> vec3<f32> {
   if (u.size.z != 0u) { return max(c, vec3<f32>(0.0)); }
   return srgb_eotf(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)));
 }
+/** Where the window's position t puts the sample for the output pixel c. */
+fn at(c: vec2<f32>, t: f32) -> vec2<f32> {
+  if (u.k.y > 0.5) { return u.d.xy + (c - u.d.xy) * exp(u.k.z * t); }
+  return c + u.d.xy * t;
+}
 fn mask_at(p: vec2<f32>) -> f32 {
   let lim = vec2<i32>(i32(u.size.x) - 1, i32(u.size.y) - 1);
   return clamp(textureLoad(motion, clamp(vec2<i32>(floor(p)), vec2<i32>(0), lim), 0).w, 0.0, 1.0);
@@ -43,21 +53,29 @@ fn smear(@builtin(global_invocation_id) id: vec3<u32>) {
   let dims = vec2<f32>(f32(u.size.x), f32(u.size.y));
   let c = vec2<f32>(px) + 0.5;
   let len = u.d.w - u.d.z;
-  let n = i32(clamp(ceil(len / 2.0), 2.0, 64.0));
+  // The streak here in px (along the depth: ∝ the distance from the vanishing point), and its direction.
+  var lpx = len;
+  var dir = u.d.xy;
+  if (u.k.y > 0.5) {
+    let r = c - u.d.xy;
+    lpx = len * length(r);
+    dir = r / max(length(r), 1e-3);
+  }
+  let n = i32(clamp(ceil(lpx / 2.0), 2.0, 64.0));
   var sum = vec4<f32>(0.0);
   if (u.size.w == 0u) {
     for (var k = 0; k < n; k++) {
-      let p = c + u.d.xy * (u.d.z + (f32(k) + 0.5) / f32(n) * len);
+      let p = at(c, u.d.z + (f32(k) + 0.5) / f32(n) * len);
       let a = mask_at(p);
       if (a > 0.0) { sum += vec4<f32>(lin_of(textureSampleLevel(src, lsamp, p / dims, 0.0).rgb) * a, a); }
     }
     sum /= f32(n);
   } else {
     // One spacing of pass 0, filled in.
-    let span = len / f32(n);
+    let span = lpx / f32(n);
     let m = i32(clamp(ceil(span), 1.0, 8.0)) + 1;
     for (var k = 0; k < m; k++) {
-      let p = c + u.d.xy * (((f32(k) + 0.5) / f32(m) - 0.5) * span);
+      let p = c + dir * (((f32(k) + 0.5) / f32(m) - 0.5) * span);
       sum += textureSampleLevel(acc, lsamp, p / dims, 0.0);
     }
     sum /= f32(m);
