@@ -55,7 +55,8 @@ export async function runAutotest(app: AutotestApp) {
   /** Chrome's own account of JS + WebAssembly memory, by worker (where the browser has it; ?jsmem). */
   const jsMem = async (): Promise<Record<string, number>> => {
     const pm = performance as Performance & { measureUserAgentSpecificMemory?: () => Promise<{ breakdown: Array<{ bytes: number; types: string[]; attribution: Array<{ url?: string; scope?: string }> }> }> };
-    // Only when asked (?jsmem): the browser answers after its next full GC — up to ~20 s a call.
+    // Only when asked (?jsmem; memcheck always asks): the browser answers after a full GC —
+    // up to ~20 s a call — and memcheck's page limits assume that collection.
     if (!q.has("jsmem") || !pm.measureUserAgentSpecificMemory) return {};
     try {
       const r = await pm.measureUserAgentSpecificMemory();
