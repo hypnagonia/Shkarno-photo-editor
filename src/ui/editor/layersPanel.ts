@@ -220,7 +220,7 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     const input = el("input", { type: "range", min: "-90", max: "90", step: "1" });
     const lab = el("label", { text: label });
     const dial = el("span", { class: "angle-dial", role: "slider", "aria-label": label, "aria-valuemin": "-90", "aria-valuemax": "90" });
-    dial.innerHTML = `<svg viewBox="-20 -20 40 40" aria-hidden="true"><circle r="18.5" fill="none" stroke="currentColor" stroke-opacity=".35"/><g class="arrow"><path d="M-13 0H13M-13 0l5-4.5M-13 0l5 4.5M13 0l-5-4.5M13 0l-5 4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g></svg>`;
+    dial.innerHTML = `<svg viewBox="-20 -20 40 40" aria-hidden="true"><circle r="18.8" fill="none" stroke="currentColor" stroke-opacity=".3" stroke-width=".8"/><g class="arrow"><path d="M-13 0H13M-13 0l4.5-4M-13 0l4.5 4M13 0l-4.5-4M13 0l-4.5 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></g></svg>`;
     const arrow = dial.querySelector<SVGGElement>(".arrow")!;
     const show = () => {
       const v = get();
