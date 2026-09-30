@@ -8,6 +8,7 @@ import { createToneEqPanel } from "./ui/toneEqPanel.ts";
 import { createContrastEqPanel } from "./ui/contrastEqPanel.ts";
 import { createFilmPanel } from "./ui/filmPanel.ts";
 import { keepRuntimeWhenIdle } from "./pwa.ts";
+import logoSvg from "../public/logo.svg?raw";
 import { clearFeedback, feedbackBlob, feedbackCount, recordEdit } from "./ui/autoFeedback.ts";
 import { DEPTH_BANDS, defaultParams, type Decision, type DepthBand, type Params } from "./decision/params.ts";
 import { createLookPanel } from "./ui/lookPanel.ts";
@@ -42,9 +43,10 @@ if (autotestPhone) forcePhone(true);
 // --------------------------------------------------------------------------- DOM helpers
 
 const app = document.getElementById("app")!;
-// The mark: the wanderer from jenyadoesapps.com, painted in the ink colour (a CSS mask
-// over public/logo-mark.png), so it follows the theme.
+// The mark: an old rangefinder camera with a lens of paint (public/logo.svg), inline so
+// its body takes the ink colour and follows the theme; the paint stays paint.
 const logo = el("span", { class: "logo", "aria-hidden": "true" });
+logo.innerHTML = logoSvg;
 const header = el("header", { class: "top" }, logo, el("h1", { text: "Shkarno" }));
 const capsEl = el("div", { class: "caps", text: t("app.starting") });
 header.append(capsEl);
