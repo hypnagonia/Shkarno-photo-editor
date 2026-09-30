@@ -1,13 +1,13 @@
-<div align="center">
+<img src="public/icon-192.png" width="84" height="84" alt="Shkarno logo" align="left">
 
-<h1><img src="public/icon-192.png" width="56" height="56" alt="Shkarno logo" align="absmiddle">&nbsp;Shkarno</h1>
+# Shkarno
 
-**A free, private RAW photo editor that runs in your browser.**
+**A free, private RAW photo editor that runs in your browser.**<br>
 iPhone ProRAW · DNG · HEIC · JPEG — edited on your device, never uploaded.
 
-[**Open Shkarno →**](https://img.jenyadoesapps.com/)
+<br clear="left">
 
-</div>
+[**Open Shkarno →**](https://img.jenyadoesapps.com/)
 
 ---
 
