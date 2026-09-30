@@ -7,6 +7,7 @@ import type { Capabilities, ExportFormat, FromWorker, StageProfile, Summary, ToW
 import { createToneEqPanel } from "./ui/toneEqPanel.ts";
 import { createContrastEqPanel } from "./ui/contrastEqPanel.ts";
 import { createFilmPanel } from "./ui/filmPanel.ts";
+import { keepRuntimeWhenIdle } from "./pwa.ts";
 import { clearFeedback, feedbackBlob, feedbackCount, recordEdit } from "./ui/autoFeedback.ts";
 import { DEPTH_BANDS, defaultParams, type Decision, type DepthBand, type Params } from "./decision/params.ts";
 import { createLookPanel } from "./ui/lookPanel.ts";
@@ -1697,6 +1698,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       busy = false;
       break;
     case "analysis":
+      keepRuntimeWhenIdle(); // the analysis used ONNX Runtime: keep it for offline use
       checkResult = undefined; checkStale = true; renderCheck();
       noteAnalysisStage();
       opening = false;

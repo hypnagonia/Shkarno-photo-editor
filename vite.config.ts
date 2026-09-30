@@ -73,8 +73,13 @@ const serviceWorker: Plugin = {
     const hash = createHash("sha256");
     for (const f of files) hash.update(f).update(readFileSync(join(dist, f)));
     const precache = ["/", ...files.filter((f) => f !== "/index.html")];
+    // ONNX Runtime's version: its files' names and sizes (they change with the package).
+    const ortDir = join(dist, "ort");
+    const runtime = createHash("sha256");
+    try { for (const f of readdirSync(ortDir).sort()) runtime.update(f).update(String(statSync(join(ortDir, f)).size)); } catch { /* no /ort */ }
     const sw = readFileSync(new URL("./scripts/sw.template.js", import.meta.url), "utf8")
       .replace("__VERSION__", JSON.stringify(hash.digest("hex").slice(0, 12)))
+      .replace("__RUNTIME__", JSON.stringify(runtime.digest("hex").slice(0, 12)))
       .replace("__PRECACHE__", JSON.stringify(precache));
     writeFileSync(join(dist, "sw.js"), sw);
   },
