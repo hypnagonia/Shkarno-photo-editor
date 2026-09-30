@@ -76,7 +76,9 @@ header.top {
   display: flex; align-items: center; gap: 10px;
   border-bottom: 1px solid var(--line);
 }
-header.top .logo { display: block; flex: none; width: 30px; height: 30px; margin: -5px 0 -5px -2px; color: var(--text); }
+/* Raised 2px: the camera's body (its mass, under the top hump) centres on the title's
+   capitals, which sit above the line box's centre (no descenders in "Shkarno"). */
+header.top .logo { display: block; flex: none; width: 30px; height: 30px; margin: -5px 0 -5px -2px; color: var(--text); transform: translateY(-2px); }
 header.top .logo svg { display: block; width: 100%; height: 100%; }
 header.top h1 { font-size: 16px; font-weight: bold; margin: 0; letter-spacing: -.02em; line-height: 1; }
 header.top .caps { font-size: 11px; color: var(--muted); text-align: right; line-height: 1.3; }
