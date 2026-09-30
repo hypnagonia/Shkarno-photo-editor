@@ -2,6 +2,44 @@
 
 Live app: [img.jenyadoesapps.com](https://img.jenyadoesapps.com/)
 
+## How it is tested
+
+Shkarno is checked at three levels. The first runs on every push; the other two need a
+real GPU and real photos, so they run on a developer machine — GitHub's hosted runners
+have no GPU and no WebGPU, and the sample photos are private.
+
+**1. Every push — [GitHub Actions](../.github/workflows/ci.yml)**
+
+- `npx tsc --noEmit` — the whole codebase type-checks (strict TypeScript).
+- `npm test` — 125 unit tests (`test/*.test.ts`, Node's test runner) on the logic that
+  decides what the GPU does: colour math and colour spaces, the automatic decisions
+  (curves, black point, skin tone, focus, depth zones), look profiles and palette
+  matching, layer masks and gradients, tap-to-select, tone equalizer, HDR and Ultra HDR
+  gain maps, JPEG/DNG preview decoding, film emulation, magic-brush geometry, the Check.
+- `npm run build` — the production bundle builds.
+
+**2. The real app on real photos — `src/autotest.ts`**
+
+The app has a scripted mode (`/?autotest&photo=…&steps=…`, local only) that opens a photo
+and runs steps in headless Chrome with WebGPU: open, select, blur, motion blur, fog,
+light, magic brush and its undo, film, tone and contrast equalizers, export, reopen. Each
+step reports timings, GPU memory and any GPU validation error (which fails the run), and
+can save its export for inspection. The scripts below drive it.
+
+- `npm run bench` — **quality benchmark**: 19 iPhone photos opened as on a phone, each
+  scored against the iPhone's own rendering of the same file (exposure, colour
+  difference, colourfulness) and by the Check's findings, compared with a saved baseline.
+  Every change to the automatic development is measured with it.
+- `npm run memcheck` — **memory guard**: the phone code path on sample photos, step by
+  step, against a memory budget (below). `npm run deploy` runs it and refuses to ship a
+  build that breaks the budget.
+
+**3. What is not automated**
+
+WGSL shaders, LibRaw (WebAssembly) and the neural networks are exercised end to end by
+level 2, not unit-tested in isolation; their results are judged on the exported images.
+Visual changes are reviewed on before/after exports.
+
 ## Develop
 
 ```sh

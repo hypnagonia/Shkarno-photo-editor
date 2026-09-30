@@ -7,6 +7,9 @@ iPhone ProRAW · DNG · HEIC · JPEG — edited on your device, never uploaded.
 
 [**Open Shkarno →**](https://img.jenyadoesapps.com/)
 
+[![CI](https://github.com/hypnagonia/image2image/actions/workflows/ci.yml/badge.svg)](https://github.com/hypnagonia/image2image/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 </div>
 
 ---
@@ -62,7 +65,11 @@ npm test
 npm run build
 ```
 
-More in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Every push is type-checked, unit-tested and built on GitHub Actions. Rendering, the
+neural networks and memory use are tested on real photos with WebGPU in headless Chrome:
+an automated test mode of the app, a quality benchmark against the iPhone's own
+rendering, and a memory budget that every release must pass. Details:
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Credits
 
@@ -70,3 +77,8 @@ Built with LibRaw, libheif and ONNX Runtime Web, and the SegFormer, Depth Anythi
 MobileSAM, Swin2SR, LaMa and MI-GAN models. Licences:
 [THIRD_PARTY_NOTICES](public/THIRD_PARTY_NOTICES.txt) — the SegFormer weights are
 licensed for non-commercial use only.
+
+## License
+
+[MIT](LICENSE) for Shkarno's own code. Third-party libraries and models keep their own
+licences.

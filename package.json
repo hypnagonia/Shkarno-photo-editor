@@ -1,6 +1,9 @@
 {
   "name": "image-improver2",
   "private": true,
+  "license": "MIT",
+  "description": "Free, private RAW photo editor in the browser: iPhone ProRAW, DNG, HEIC. WebGPU, on-device AI.",
+  "homepage": "https://img.jenyadoesapps.com/",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
