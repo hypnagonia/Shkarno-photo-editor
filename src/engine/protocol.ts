@@ -122,7 +122,7 @@ export type FromWorker =
   | { type: "brightest"; x: number; y: number }
   /** Distance 0…1 on a w × h grid (rows top to bottom), and the vanishing point (0…1). */
   | { type: "depthField"; w: number; h: number; data: number[]; vanish: [number, number] }
-  | { type: "motionField"; w: number; h: number; data: number[]; mask: number[]; vanish: [number, number] }
+  | { type: "motionField"; w: number; h: number; data: number[]; mask: number[]; vanish: [number, number]; range: [number, number]; reach: number }
   /** A worked-out fix for a finding of the last check; `done` when there are no more. */
   | { type: "checkFix"; id?: CheckItem["id"]; fix?: FixChange[]; partial?: boolean; done?: boolean }
   | { type: "lookProfile"; profile: LookProfile; reference: ColorStats; message: string }

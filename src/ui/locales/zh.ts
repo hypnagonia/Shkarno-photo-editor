@@ -81,6 +81,8 @@ export const zh: Dict = {
   "blurl.motionHint": "沿所选方向（0° 为水平）拖影蒙版覆盖的部分，如运动的主体或追拍：在蒙版中选取主体并反转——背景拖影，主体保持清晰。",
   "blurl.depth": "纵深",
   "blurl.depthNote": "拖影汇向场景深处的消失点，近处拖影最强",
+  "blurl.falloff": "纵深拖影",
+  "blurl.falloffNote": "− 远处拖影更弱（真实），0 均匀，+ 更强（变焦爆炸）",
   "blurl.through": "穿过蒙版",
   "blurl.throughNote": "拖影越过蒙版边缘；清晰部分在拖影中留下痕迹",
   "grad.presets": "调色板",

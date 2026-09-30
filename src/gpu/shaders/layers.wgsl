@@ -406,19 +406,23 @@ fn apply_layers(e0: vec3<f32>, g: array<f32, 12>, dist: f32, skin_w: f32, uv: ve
     // Blur: no colour change here; the blur pass does it, by this amount.
     if (u32(L.a.x) == 7u) {
       if (L.p0.y > 0.5) {
-        // The streak by nearness, as seen from a moving camera: sideways 1.5× at the front,
-        // 0.25× in the far distance. Into the depth (p0.w): 1.6× … 0.1×.
+        // Sideways: the streak by nearness, as seen from a moving camera (1.5× at the front,
+        // 0.25× in the far distance). Into the depth (p0.w ≥ 1): the flow of a forward
+        // motion, ∝ r / Z — by depth within the masked part itself (p0.w − 1 near … p1.x
+        // far: 1.4× … 0.25×) and by the distance from its vanishing point (p1.yz) over its
+        // reach (p1.w); its direction away from that point, in pixel proportions.
         // (src/layers/motion.ts draws the same on the photo.)
         let deep = L.p0.w > 0.5;
+        let through = L.p0.y > 1.5;
         let dd = clamp(lay_dist, 0.0, 1.0);
-        // Through the mask (p1.x): the streak as if unmasked; the mask only mixes it in.
-        let through = L.p1.x > 0.5;
-        // Into the depth: away from the layer's vanishing point (p1.yz), in pixel proportions;
-        // and, as the flow of a forward motion, faster the farther from that point (no
-        // starburst where the streaks meet).
         let r = (lay_uv - L.p1.yz) * vec2<f32>(lay_aspect, 1.0);
-        let radial = select(1.0, min(1.0, length(r) / (0.3 * max(lay_aspect, 1.0))), deep);
-        let full = L.p0.x * select(mix(1.5, 0.25, dd), mix(1.6, 0.1, dd), deep) * radial;
+        let rel = clamp((dd - (L.p0.w - 1.0)) / max(L.p1.x - (L.p0.w - 1.0), 0.05), 0.0, 1.0);
+        // p0.z: falloff −1 (deep end least, ∝ r / Z) … 0 (even) … +1 (deep end most).
+        let fo = clamp(L.p0.z, -1.0, 1.0);
+        let rn = clamp(length(r) / max(L.p1.w, 0.05), 0.0, 1.0);
+        let flow = select(mix(1.0, mix(0.6, 1.6, rel), fo) * smoothstep(0.0, 0.15, rn),
+                          mix(1.0, mix(1.4, 0.25, rel) * (0.15 + 0.85 * rn), -fo), fo < 0.0);
+        let full = L.p0.x * select(mix(1.5, 0.25, dd), flow, deep);
         let m = select(w * full, full, through);
         let ang = select(L.p0.z, atan2(-r.y, r.x), deep && dot(r, r) > 1e-8);
         if (m * select(1.0, w, through) > lay_motion.x * lay_motion.z) { lay_motion = vec3<f32>(m, ang, select(1.0, w, through)); }

@@ -10,6 +10,7 @@
  * Every change calls ctx.changed(label): the app pushes the parameters (drafts
  * while a control is held) and commits one history step when the gesture ends.
  */
+import { DEFAULT_FALLOFF } from "../../layers/motion.ts";
 import type { Params, Region, DepthBand } from "../../decision/params.ts";
 import { DEPTH_BANDS } from "../../decision/params.ts";
 import { GROUPS } from "../../neural/scene.ts";
@@ -328,7 +329,9 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
         return [chips([{ id: "lens", label: t("blurl.lens") }, { id: "motion", label: t("blurl.motion") }] as const, b.motion ? "motion" : "lens", (v) => { b.motion = v === "motion"; edit(); renderProps(); }),
           slider(t("blurl.amount"), 0, b.motion ? 3 : 1, 0.01, () => b.amount, (v) => { b.amount = v; ctx.motionGuide?.(b); }, (v) => `${Math.round(v * 100)}%`, 0.4),
           ...(b.motion ? [toggleRow(t("blurl.depth"), t("blurl.depthNote"), () => !!b.depth, (v) => { b.depth = v; renderProps(); }),
-            ...(b.depth ? [toggleRow(t("blurl.through"), t("blurl.throughNote"), () => !!b.through, (v) => (b.through = v))] : []),
+            ...(b.depth ? [slider(t("blurl.falloff"), -1, 1, 0.01, () => b.falloff ?? DEFAULT_FALLOFF, (v) => { b.falloff = v; ctx.motionGuide?.(b); }, (v) => `${v > 0 ? "+" : ""}${Math.round(v * 100)}%`, DEFAULT_FALLOFF),
+              el("p", { class: "muted", text: t("blurl.falloffNote") }),
+              toggleRow(t("blurl.through"), t("blurl.throughNote"), () => !!b.through, (v) => (b.through = v))] : []),
             ...(b.depth ? [] : [angleRow(t("blurl.angle"), () => b.angle ?? 0, (v) => { b.angle = v; ctx.motionGuide?.(b); })])] : []),
           el("p", { class: "muted", text: t(b.motion ? "blurl.motionHint" : "blurl.hint") })];
       }

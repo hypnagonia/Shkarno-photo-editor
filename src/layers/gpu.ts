@@ -13,6 +13,7 @@
  *   shape: angle (rad), size, x, y, softness (the style in the region field: 0 linear, 1 radial);
  *   select: layer of the selection texture (−1 = not ready: nothing).
  */
+import { DEFAULT_FALLOFF } from "./motion.ts";
 import { GROUPS } from "../neural/scene.ts";
 import { DEPTH_BANDS, type Curves } from "../decision/params.ts";
 import { curveLUT, CURVE_LUT_SIZE } from "../render/curves.ts";
@@ -138,7 +139,13 @@ export function packLayers(layers: Layer[], autoStrength = 1, enable?: { curves?
         rows.push(cachedRow("g" + JSON.stringify(g.gradient), () => gradientTable(g.gradient, ATLAS_W)));
         break;
       }
-      case "blur": { const b = l.params as LayerParams["blur"]; p[0] = Math.max(0, b.amount); p[1] = b.motion ? 1 : 0; p[2] = ((b.angle ?? 0) * Math.PI) / 180; p[3] = b.depth ? 1 : 0; p[4] = b.through ? 1 : 0; const v = b.vanish ?? vanish; p[5] = v[0]; p[6] = v[1]; break; }
+      case "blur": { const b = l.params as LayerParams["blur"]; p[0] = Math.max(0, b.amount); p[1] = b.motion ? 1 : 0; p[2] = ((b.angle ?? 0) * Math.PI) / 180; const v = b.vanish ?? vanish, rg = b.range ?? [0, 1];
+        // p0.y 0 lens, 1 motion, 2 motion through the mask; p0.w 0 sideways, else 1 + the part's near depth.
+        p[1] = b.motion ? (b.through ? 2 : 1) : 0; p[3] = b.depth ? 1 + Math.min(0.999, Math.max(0, rg[0])) : 0;
+        // (Into the depth the angle is unused: p0.z carries the falloff instead.)
+        if (b.depth) p[2] = Math.min(1, Math.max(-1, b.falloff ?? DEFAULT_FALLOFF));
+        p[4] = rg[1]; p[5] = v[0]; p[6] = v[1]; p[7] = b.reach ?? 0.6;
+        break; }
       case "fog": {
         const f = l.params as LayerParams["fog"];
         const c = p3Linear(f.color);

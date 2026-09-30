@@ -81,6 +81,8 @@ export const es: Dict = {
   "blurl.motionHint": "Barre lo que cubre la máscara en la dirección elegida (0° = horizontal), como un sujeto en movimiento o un barrido de cámara: en Máscara elige el sujeto e Invertir — el fondo se barre, el sujeto queda nítido.",
   "blurl.depth": "Hacia el fondo",
   "blurl.depthNote": "las estelas convergen hacia donde se aleja la escena; lo cercano se barre más",
+  "blurl.falloff": "Fondo",
+  "blurl.falloffNote": "− lo lejano se barre menos (como en la realidad), 0 igual, + más (explosión de zoom)",
   "blurl.through": "A través de la máscara",
   "blurl.throughNote": "las estelas cruzan el borde de la máscara; lo nítido deja rastro en ellas",
   "grad.presets": "Paletas",

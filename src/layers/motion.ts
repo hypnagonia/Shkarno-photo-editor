@@ -7,11 +7,21 @@ import type { LayerParams } from "./model.ts";
 
 /** A streak at amount 1 is this share of the picture's long side. */
 export const MOTION_STREAK = 0.06;
+/** Into the depth, how the deep end streaks when the layer does not say: more than the near. */
+export const DEFAULT_FALLOFF = 0.5;
+
+/** Into the depth: the streak's factor at relative depth `rel` (0 near … 1 deep end of the part) and `rn` (distance from the vanishing point over the part's reach). */
+export function depthFlow(rel: number, rn: number, falloff: number): number {
+  const fo = Math.min(1, Math.max(-1, falloff));
+  const sm = (x: number) => { const t = Math.min(1, Math.max(0, x / 0.15)); return t * t * (3 - 2 * t); };
+  const mix = (a: number, b: number, t: number) => a + (b - a) * t;
+  return fo < 0 ? mix(1, mix(1.4, 0.25, rel) * (0.15 + 0.85 * rn), -fo) : mix(1, mix(0.6, 1.6, rel), fo) * sm(rn);
+}
 
 /** Streak length by nearness (distance 0 = nearest … 1 = farthest), as seen from a moving camera. */
 export function motionScale(dist: number, deep: boolean): number {
   const d = Math.min(1, Math.max(0, dist));
-  return deep ? 1.6 + (0.1 - 1.6) * d : 1.5 + (0.25 - 1.5) * d;
+  return deep ? 1.4 + (0.25 - 1.4) * d : 1.5 + (0.25 - 1.5) * d;
 }
 
 export interface Arrow { x: number; y: number; dx: number; dy: number; len: number }
@@ -39,9 +49,15 @@ export function motionArrows(b: LayerParams["blur"], depth: { w: number; h: numb
       if (r < 1e-3) continue;
       dx = rx / r; dy = ry / r;
     }
-    // (Into the depth: faster the farther from the vanishing point, as layers.wgsl.)
-    const radial = b.depth ? Math.min(1, Math.hypot(((x - vanish[0]) * aspect), y - vanish[1]) / (0.3 * Math.max(aspect, 1))) : 1;
-    out.push({ x, y, dx, dy, len: b.amount * MOTION_STREAK * motionScale(d, !!b.depth) * radial });
+    // Into the depth: ∝ r / Z within the part (as layers.wgsl).
+    let len = b.amount * MOTION_STREAK;
+    if (b.depth) {
+      const rg = b.range ?? [0, 1];
+      const rel = Math.min(1, Math.max(0, (d - rg[0]) / Math.max(rg[1] - rg[0], 0.05)));
+      const r = Math.hypot((x - vanish[0]) * aspect, y - vanish[1]);
+      len *= depthFlow(rel, Math.min(1, r / Math.max(b.reach ?? 0.6, 0.05)), b.falloff ?? DEFAULT_FALLOFF);
+    } else len *= motionScale(d, false);
+    out.push({ x, y, dx, dy, len });
   }
   return out;
 }

@@ -1124,10 +1124,10 @@ export class Engine {
    * recedes to: the centre of its farthest tenth (mask-weighted) — the far end of a
    * train, not the sky above it. Nothing covered: the photo's own vanishing point.
    */
-  async motionField(layer: number): Promise<{ w: number; h: number; data: number[]; mask: number[]; vanish: [number, number] }> {
+  async motionField(layer: number): Promise<{ w: number; h: number; data: number[]; mask: number[]; vanish: [number, number]; range: [number, number]; reach: number }> {
     const base = this.depthField();
     const s = this.s, d = s?.distCPU;
-    if (!s || !d || layer < 0) return { ...base, mask: base.data.map(() => 1) };
+    if (!s || !d || layer < 0) return { ...base, mask: base.data.map(() => 1), range: [0, 1], reach: 0.6 };
     await this.ensureSelections(s, s.params);
     const t = await this.ensureThumb(384);
     const r = await this.renderer.render({ base: t.base, denoised: t.denoised, width: t.w, height: t.h, fullWidth: s.work.width }, s.maps, s.params,
@@ -1151,12 +1151,22 @@ export class Engine {
       }
       if (sw > 0) vanish = [sx / sw / t.w, sy / sw / t.h];
     }
+    // The part's own depth (5th … 95th percentile, near to far) and its extent from the
+    // vanishing point (95th percentile, in heights).
+    let range: [number, number] = [0, 1], reach = 0.6;
+    if (idx.length) {
+      const at = (q: number) => idx[Math.min(idx.length - 1, Math.floor(idx.length * q))];
+      range = [dist[at(0.95)], dist[at(0.05)]];
+      const aspect = t.w / t.h;
+      const rs = idx.map((i) => Math.hypot((((i % t.w) + 0.5) / t.w - vanish[0]) * aspect, (Math.floor(i / t.w) + 0.5) / t.h - vanish[1])).sort((a, b) => a - b);
+      reach = rs[Math.floor(rs.length * 0.95)] ?? 0.6;
+    }
     const mask = new Array(base.w * base.h).fill(0), n = new Array(base.w * base.h).fill(0);
     for (let y = 0; y < t.h; y++) for (let x = 0; x < t.w; x++) {
       const k = Math.min(base.h - 1, Math.floor((y * base.h) / t.h)) * base.w + Math.min(base.w - 1, Math.floor((x * base.w) / t.w));
       mask[k] += m[y * t.w + x]; n[k]++;
     }
-    return { ...base, mask: mask.map((v, k) => (n[k] ? v / n[k] : 0)), vanish };
+    return { ...base, mask: mask.map((v, k) => (n[k] ? v / n[k] : 0)), vanish, range, reach };
   }
 
   focusAt(x: number, y: number): number | undefined {

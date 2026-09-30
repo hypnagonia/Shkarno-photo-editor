@@ -81,6 +81,8 @@ export const pt: Dict = {
   "blurl.motionHint": "Arrasta o que a máscara cobre na direção escolhida (0° = horizontal), como um objeto em movimento ou um panning: em Máscara escolha o objeto e Inverter — o fundo arrasta, o objeto fica nítido.",
   "blurl.depth": "Para o fundo",
   "blurl.depthNote": "os rastros convergem para onde a cena se afasta; o que está perto arrasta mais",
+  "blurl.falloff": "Fundo",
+  "blurl.falloffNote": "− o distante arrasta menos (como na realidade), 0 igual, + mais (zoom burst)",
   "blurl.through": "Através da máscara",
   "blurl.throughNote": "os rastros cruzam a borda da máscara; o que fica nítido deixa rastro neles",
   "grad.presets": "Paletas",

@@ -86,6 +86,8 @@ export const en = {
   "blurl.motionHint": "Streaks what the mask covers along the direction (0° = horizontal), as a moving subject or a panned camera: Pick the subject in Mask and Invert — the background streaks, the subject stays sharp.",
   "blurl.depth": "Into the depth",
   "blurl.depthNote": "streaks run toward where the scene recedes, near things streak most",
+  "blurl.falloff": "Deep end",
+  "blurl.falloffNote": "− the deep end streaks less (as in reality), 0 evenly, + more (a zoom burst)",
   "blurl.through": "Through the mask",
   "blurl.throughNote": "streaks run over the mask edge; what stays sharp trails into them",
   "grad.presets": "Palettes",

@@ -135,9 +135,14 @@ export interface LayerParams {
    * mixes the result in), so what it keeps sharp trails into the streaks around it.
    * `vanish` (0…1): where the masked part recedes to — the far end of what the mask
    * covers, worked out by the engine from the mask and the depth map (absent: the
-   * photo's own vanishing point).
+   * photo's own vanishing point). `range`: the masked part's own depth (near, far) and
+   * `reach` its farthest extent from `vanish` (share of the height): into the depth,
+   * a streak is longest at the part's near end and far from `vanish`, shortest at its
+   * deep end — the flow of a forward motion, ∝ r / Z — at `falloff` −1; 0 the same
+   * streak all along; +1 the deep end streaked most (a zoom burst, the part dissolving
+   * into the depth). Absent: +0.5.
    */
-  blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean; through?: boolean; vanish?: [number, number] };
+  blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean; through?: boolean; vanish?: [number, number]; range?: [number, number]; reach?: number; falloff?: number };
   /**
    * Fog: air thickening with distance (the depth map) — from `start` (0 = the nearest,
    * 1 = the farthest) on, exponentially, toward `color` (hex); `amount` 0…3 its

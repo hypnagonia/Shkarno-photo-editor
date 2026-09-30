@@ -512,7 +512,7 @@ function shownFocusPoints(): Array<{ x: number; y: number; auto?: boolean }> {
 /** One ring per focus point; numbered so several subjects can be told apart. */
 let motionGuide: LayerParams["blur"] | undefined;
 /** The shown Motion layer's mask on the coarse depth grid, and where what it covers recedes to. */
-let motionField: { w: number; h: number; data: number[]; mask: number[]; vanish: [number, number] } | undefined;
+let motionField: { w: number; h: number; data: number[]; mask: number[]; vanish: [number, number]; range: [number, number]; reach: number } | undefined;
 let motionAsk = 0;
 /** A Motion layer's settings opened (layer: its live index — its mask read again) or changed. */
 function setMotionGuide(b: LayerParams["blur"] | undefined, layer?: number) {
@@ -524,8 +524,9 @@ function setMotionGuide(b: LayerParams["blur"] | undefined, layer?: number) {
       motionField = f;
       // Into the depth: toward where the masked part recedes (kept in the layer, so the
       // render and the export use it too).
-      const v = b.vanish;
-      if (!v || Math.hypot(v[0] - f.vanish[0], v[1] - f.vanish[1]) > 0.01) { b.vanish = f.vanish; pushParams(); }
+      const v = b.vanish, rg = b.range;
+      const moved = !v || Math.hypot(v[0] - f.vanish[0], v[1] - f.vanish[1]) > 0.01 || !rg || Math.abs(rg[0] - f.range[0]) + Math.abs(rg[1] - f.range[1]) > 0.02 || Math.abs((b.reach ?? 0) - f.reach) > 0.02;
+      if (moved) { b.vanish = f.vanish; b.range = f.range; b.reach = f.reach; pushParams(); }
       renderMotionGuide();
     });
   }
