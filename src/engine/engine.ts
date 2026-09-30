@@ -1139,17 +1139,28 @@ export class Engine {
       m[i] = px[i * 4 + 1] / 255;
       dist[i] = d.data[Math.min(d.h - 1, Math.floor((y * d.h) / t.h)) * d.w + Math.min(d.w - 1, Math.floor((x * d.w) / t.w))];
     }
-    // The farthest tenth of what the mask covers (by mask weight).
+    // The farthest and the nearest tenth of what the mask covers (by mask weight); the
+    // vanishing point lies beyond the far end, along the part's own axis (near → far):
+    // its perspective lines meet past it, and the whole part stays on one side of the
+    // point — one direction of motion, no streaks fanning out in the middle of it.
     const idx = Array.from(m.keys()).filter((i) => m[i] > 0.25).sort((a, b) => dist[b] - dist[a]);
     let vanish = this.renderer.vanishing;
     if (idx.length) {
       const total = idx.reduce((a, i) => a + m[i], 0);
-      let acc = 0, sx = 0, sy = 0, sw = 0;
-      for (const i of idx) {
-        if (acc > total * 0.1) break;
-        acc += m[i]; sx += ((i % t.w) + 0.5) * m[i]; sy += (Math.floor(i / t.w) + 0.5) * m[i]; sw += m[i];
-      }
-      if (sw > 0) vanish = [sx / sw / t.w, sy / sw / t.h];
+      const centre = (order: number[]): [number, number] => {
+        let acc = 0, sx = 0, sy = 0, sw = 0;
+        for (const i of order) {
+          if (acc > total * 0.1) break;
+          acc += m[i]; sx += ((i % t.w) + 0.5) * m[i]; sy += (Math.floor(i / t.w) + 0.5) * m[i]; sw += m[i];
+        }
+        return sw > 0 ? [sx / sw / t.w, sy / sw / t.h] : [0.5, 0.5];
+      };
+      const far = centre(idx), near = centre([...idx].reverse());
+      // Past the far end by 40 % of the part's length (in picture proportions, then back).
+      const aspect = t.w / t.h;
+      const ax = (far[0] - near[0]) * aspect, ay = far[1] - near[1];
+      const len = Math.hypot(ax, ay);
+      vanish = len > 0.02 ? [far[0] + (ax * 0.4) / aspect, far[1] + ay * 0.4] : far;
     }
     // The part's own depth (5th … 95th percentile, near to far) and its extent from the
     // vanishing point (95th percentile, in heights).
