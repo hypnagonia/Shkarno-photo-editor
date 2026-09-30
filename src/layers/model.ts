@@ -145,9 +145,9 @@ export interface LayerParams {
   blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean; through?: boolean; vanish?: [number, number]; range?: [number, number]; reach?: number; falloff?: number };
   /**
    * Fog: air thickening with distance (the depth map) — from `start` (0 = the nearest,
-   * 1 = the farthest) on, exponentially, toward `color` (hex); `amount` 0…3 its
-   * density (1: the far distance ≈ 92 % fog; 3: the middle distance lost too). Mixed
-   * in linear light.
+   * 1 = the farthest) on, toward `color` (hex), by the real distance through the air
+   * (the depth map is disparity: distance ∝ 1 / (1 − d)), so it thickens all the way to
+   * the horizon; `amount` 0…3 its density. Mixed in linear light.
    */
   fog: { amount: number; start: number; color: string };
   /**

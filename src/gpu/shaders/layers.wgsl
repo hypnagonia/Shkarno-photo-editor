@@ -264,13 +264,21 @@ fn op_exposure(L: LayerRec, e: vec3<f32>) -> vec3<f32> {
 }
 
 /**
- * Fog: toward its colour (p1.xyz, linear P3) by distance — from p0.y on, exponentially
- * (Beer–Lambert): density p0.x 1 leaves ≈ 8 % of the far distance, 3 a thick fog that
- * swallows the middle distance too.
+ * The real distance a depth-map value stands for (relative): the map is linear in
+ * disparity, and distance goes as 1 / disparity — near things spread out, the far
+ * distance runs on and on (finite at the far end: 12.5).
+ */
+fn fog_z(d: f32) -> f32 { let c = clamp(d, 0.0, 1.0); return c / (1.0 - 0.92 * c); }
+
+/**
+ * Fog: toward its colour (p1.xyz, linear P3), by the air between — Beer–Lambert over the
+ * real distance past where it starts (p0.y, a depth-map value), so it keeps thickening
+ * all the way to the horizon instead of topping out in the middle distance. Density
+ * p0.x 1: half-way fog at about four times the starting distance's depth.
  */
 fn op_fog(L: LayerRec, e: vec3<f32>) -> vec3<f32> {
-  let x = max(lay_dist - L.p0.y, 0.0) / max(1.0 - L.p0.y, 1e-3);
-  let f = 1.0 - exp(-2.5 * max(L.p0.x, 0.0) * x);
+  let z = max(fog_z(lay_dist) - fog_z(L.p0.y), 0.0);
+  let f = 1.0 - exp(-0.35 * max(L.p0.x, 0.0) * z);
   return srgb_oetf(clamp(mix(srgb_eotf(e), L.p1.xyz, f), vec3<f32>(0.0), vec3<f32>(1.0)));
 }
 
