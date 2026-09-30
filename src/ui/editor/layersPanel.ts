@@ -212,6 +212,37 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     show();
     return el("div", { class: "row" }, lab, input, out);
   }
+  /**
+   * A direction −90…90° (0 = horizontal, positive = up to the right): a slider, and a dial
+   * whose two-headed arrow shows it (a streak runs both ways) — drag the dial to set it.
+   */
+  function angleRow(label: string, get: () => number, set: (v: number) => void): HTMLElement {
+    const input = el("input", { type: "range", min: "-90", max: "90", step: "1" });
+    const lab = el("label", { text: label });
+    const dial = el("span", { class: "angle-dial", role: "slider", "aria-label": label, "aria-valuemin": "-90", "aria-valuemax": "90" });
+    dial.innerHTML = `<svg viewBox="-20 -20 40 40" aria-hidden="true"><circle r="18.5" fill="none" stroke="currentColor" stroke-opacity=".35"/><g class="arrow"><path d="M-13 0H13M-13 0l5-4.5M-13 0l5 4.5M13 0l-5-4.5M13 0l-5 4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g></svg>`;
+    const arrow = dial.querySelector<SVGGElement>(".arrow")!;
+    const show = () => {
+      const v = get();
+      input.value = String(v);
+      lab.textContent = `${label} ${Math.round(v)}°`;
+      arrow.setAttribute("transform", `rotate(${-v})`); // screen y points down
+      dial.setAttribute("aria-valuenow", String(Math.round(v)));
+    };
+    input.oninput = () => { set(parseFloat(input.value)); show(); edit(); };
+    lab.addEventListener("dblclick", () => { set(0); show(); edit(); });
+    // Drag on the dial: the angle of the finger from its centre, folded to −90…90.
+    const fromPointer = (e: PointerEvent) => {
+      const r = dial.getBoundingClientRect();
+      let a = (Math.atan2(-(e.clientY - (r.top + r.height / 2)), e.clientX - (r.left + r.width / 2)) * 180) / Math.PI;
+      if (a > 90) a -= 180; else if (a < -90) a += 180;
+      set(Math.round(a)); show(); edit();
+    };
+    dial.addEventListener("pointerdown", (e) => { dial.setPointerCapture(e.pointerId); fromPointer(e); });
+    dial.addEventListener("pointermove", (e) => { if (dial.hasPointerCapture(e.pointerId)) fromPointer(e); });
+    show();
+    return el("div", { class: "row" }, lab, input, dial);
+  }
   const pct = (v: number) => `${v > 0 ? "+" : ""}${Math.round(v * 100)}`;
   const deg = (v: number) => `${v > 0 ? "+" : ""}${Math.round(v)}°`;
   const ev = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(2)}`;
@@ -283,7 +314,7 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
         const b = l.params as LayerParams["blur"];
         return [chips([{ id: "lens", label: t("blurl.lens") }, { id: "motion", label: t("blurl.motion") }] as const, b.motion ? "motion" : "lens", (v) => { b.motion = v === "motion"; edit(); renderProps(); }),
           slider(t("blurl.amount"), 0, 1, 0.01, () => b.amount, (v) => (b.amount = v), (v) => `${Math.round(v * 100)}%`, 0.4),
-          ...(b.motion ? [slider(t("blurl.angle"), -90, 90, 1, () => b.angle ?? 0, (v) => (b.angle = v), (v) => `${Math.round(v)}°`, 0)] : []),
+          ...(b.motion ? [angleRow(t("blurl.angle"), () => b.angle ?? 0, (v) => (b.angle = v))] : []),
           el("p", { class: "muted", text: t(b.motion ? "blurl.motionHint" : "blurl.hint") })];
       }
       case "brightContrast": {
