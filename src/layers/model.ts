@@ -11,9 +11,9 @@
 import type { CurvePoint, Curves, DepthBand, Region } from "../decision/params.ts";
 import { presetGradient, type Gradient } from "./gradient.ts";
 
-export type LayerType = "curves" | "hueSat" | "brightContrast" | "exposure" | "basic" | "gradientMap" | "gradientFill" | "blur";
+export type LayerType = "curves" | "hueSat" | "brightContrast" | "exposure" | "basic" | "gradientMap" | "gradientFill" | "blur" | "fog" | "light";
 /** GPU type index = position here (layers.wgsl). */
-export const LAYER_TYPES: LayerType[] = ["curves", "hueSat", "brightContrast", "exposure", "basic", "gradientMap", "gradientFill", "blur"];
+export const LAYER_TYPES: LayerType[] = ["curves", "hueSat", "brightContrast", "exposure", "basic", "gradientMap", "gradientFill", "blur", "fog", "light"];
 
 export type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "softLight" | "hardLight" | "darken" | "lighten"
   | "hue" | "saturation" | "color" | "luminosity"
@@ -130,9 +130,23 @@ export interface LayerParams {
    * moving subject or a panned camera; `amount` 1 = a streak of 6 % of the long side.
    * `depth`: into the depth — streaks run away from the vanishing point (the centre of
    * the farthest depth), scaled by nearness (near things up to 1.6×, the far distance
-   * hardly at all), as when moving into the scene; `angle` is then unused.
+   * hardly at all), as when moving into the scene; `angle` is then unused. `through`:
+   * the streaks run through the mask's edge instead of stopping at it (the mask only
+   * mixes the result in), so what it keeps sharp trails into the streaks around it.
    */
-  blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean };
+  blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean; through?: boolean };
+  /**
+   * Fog: air thickening with distance (the depth map) — from `start` (0 = the nearest,
+   * 1 = the farthest) on, exponentially, toward `color` (hex); `amount` 1 = the far
+   * distance lost in it. Mixed in linear light.
+   */
+  fog: { amount: number; start: number; color: string };
+  /**
+   * Light by nearness: a fill that is strongest at the front and fades with distance
+   * (a flash, a reflector), up to `amount` EV; `reach` 0…1 how far into the depth it
+   * carries. White stays white (the gain rolls off toward it).
+   */
+  light: { amount: number; reach: number };
 }
 
 export interface Layer<T extends LayerType = LayerType> {
@@ -167,6 +181,8 @@ export function defaultParams<T extends LayerType>(type: T): LayerParams[T] {
     // Foreground to transparent from the top: a graduated filter (darker sky).
     gradientFill: { gradient: { stops: [{ pos: 0, color: "#101820", alpha: 0.75 }, { pos: 0.55, color: "#101820", alpha: 0 }] }, style: "linear", angle: 90, scale: 1, x: 0.5, y: 0.5, reverse: false },
     blur: { amount: 0.4 },
+    fog: { amount: 0.5, start: 0.45, color: "#cfd8e0" },
+    light: { amount: 1, reach: 0.6 },
   };
   return structuredClone(d[type]) as LayerParams[T];
 }
@@ -193,6 +209,8 @@ export function isNeutralLayer(l: Layer): boolean {
     case "exposure": { const e = l.params as LayerParams["exposure"]; return Math.abs(e.exposure) < 1e-4 && Math.abs(e.offset) < 1e-4 && Math.abs(e.gamma - 1) < 1e-4; }
     case "basic": { const b = l.params as LayerParams["basic"]; return Object.values(b).every((v) => Math.abs(v) < 1e-4); }
     case "blur": return (l.params as LayerParams["blur"]).amount < 1e-4;
+    case "fog": return (l.params as LayerParams["fog"]).amount < 1e-4;
+    case "light": return Math.abs((l.params as LayerParams["light"]).amount) < 1e-4;
   }
   return false;
 }

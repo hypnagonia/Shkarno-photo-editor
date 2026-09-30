@@ -1106,6 +1106,19 @@ export class Engine {
     this.renderer.vanishing = vanishingPoint(s.distCPU);
   }
 
+  /** The distance map averaged onto a coarse grid (for drawing on the page), and the vanishing point. */
+  depthField(cols = 24): { w: number; h: number; data: number[]; vanish: [number, number] } {
+    const d = this.s?.distCPU;
+    if (!d) return { w: 1, h: 1, data: [0.5], vanish: [0.5, 0.5] };
+    const w = Math.min(cols, d.w), h = Math.max(1, Math.round((w * d.h) / d.w));
+    const sum = new Float64Array(w * h), n = new Float64Array(w * h);
+    for (let y = 0; y < d.h; y++) for (let x = 0; x < d.w; x++) {
+      const k = Math.min(h - 1, Math.floor((y * h) / d.h)) * w + Math.min(w - 1, Math.floor((x * w) / d.w));
+      sum[k] += d.data[y * d.w + x]; n[k]++;
+    }
+    return { w, h, data: Array.from(sum, (v, i) => (n[i] ? v / n[i] : 0.5)), vanish: this.renderer.vanishing };
+  }
+
   focusAt(x: number, y: number): number | undefined {
     const d = this.s?.distCPU;
     if (!d) return undefined;

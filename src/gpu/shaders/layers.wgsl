@@ -84,8 +84,8 @@ var<private> lay_bw: vec3<f32>;
 var<private> lay_dist: f32;
 /** How much Blur layers blur this pixel (0…1, the strongest wins): handed to the blur pass. */
 var<private> lay_blur: f32 = 0.0;
-/** Motion Blur layers here: (amount, angle in radians) of the strongest, for the motion pass. */
-var<private> lay_motion: vec2<f32> = vec2<f32>(0.0, 0.0);
+/** Motion Blur layers here: amount, angle (radians; 100 = into the depth), mix (1, or the mask when through it) of the strongest. */
+var<private> lay_motion: vec3<f32> = vec3<f32>(0.0, 0.0, 1.0);
 /** OkLab of the colour before the layers, for colour masks (computed once, on first use). */
 var<private> lay_lab: vec3<f32>;
 var<private> lay_lab_ok: bool = false;
@@ -262,6 +262,21 @@ fn op_exposure(L: LayerRec, e: vec3<f32>) -> vec3<f32> {
   return srgb_oetf(lin);
 }
 
+/** Fog: toward its colour (p1.xyz, linear P3) by distance — from p0.y on, exponentially. */
+fn op_fog(L: LayerRec, e: vec3<f32>) -> vec3<f32> {
+  let x = max(lay_dist - L.p0.y, 0.0) / max(1.0 - L.p0.y, 1e-3);
+  let f = clamp(L.p0.x, 0.0, 1.0) * (1.0 - exp(-3.0 * x)) / (1.0 - exp(-3.0));
+  return srgb_oetf(clamp(mix(srgb_eotf(e), L.p1.xyz, f), vec3<f32>(0.0), vec3<f32>(1.0)));
+}
+
+/** Light by nearness: up to p0.x EV at the front, fading by distance p0.y; white stays white. */
+fn op_light(L: LayerRec, e: vec3<f32>) -> vec3<f32> {
+  let near = 1.0 - smoothstep(0.0, L.p0.y, lay_dist);
+  let g = exp2(L.p0.x * near);
+  let lin = srgb_eotf(e);
+  return srgb_oetf(clamp(lin * g / (vec3<f32>(1.0) + (g - 1.0) * lin), vec3<f32>(0.0), vec3<f32>(1.0)));
+}
+
 fn op_basic(L: LayerRec, e: vec3<f32>) -> vec3<f32> {
   var lin = srgb_eotf(e);
   if (abs(L.p0.x) > 1e-4) { lin = clamp(expose(lin, exp2(L.p0.x)), vec3<f32>(0.0), vec3<f32>(1.0)); }
@@ -379,12 +394,17 @@ fn apply_layers(e0: vec3<f32>, g: array<f32, 12>, dist: f32, skin_w: f32, uv: ve
     // Blur: no colour change here; the blur pass does it, by this amount.
     if (u32(L.a.x) == 7u) {
       if (L.p0.y > 0.5) {
-        // By depth (p0.w): moving into the scene — the streak by nearness (1.6× at the front,
-        // 0.1× in the far distance), its direction away from the vanishing point (angle 100:
-        // the motion pass works it out per pixel).
+        // The streak by nearness, as seen from a moving camera: sideways 1.5× at the front,
+        // 0.25× in the far distance. Into the depth (p0.w): 1.6× … 0.1×, its direction away
+        // from the vanishing point (angle 100: the motion pass works it out per pixel).
+        // (src/layers/motion.ts draws the same on the photo.)
         let deep = L.p0.w > 0.5;
-        let m = w * L.p0.x * select(1.0, mix(1.6, 0.1, clamp(lay_dist, 0.0, 1.0)), deep);
-        if (m > lay_motion.x) { lay_motion = vec2<f32>(m, select(L.p0.z, 100.0, deep)); }
+        let dd = clamp(lay_dist, 0.0, 1.0);
+        // Through the mask (p1.x): the streak as if unmasked; the mask only mixes it in.
+        let through = L.p1.x > 0.5;
+        let full = L.p0.x * select(mix(1.5, 0.25, dd), mix(1.6, 0.1, dd), deep);
+        let m = select(w * full, full, through);
+        if (m * select(1.0, w, through) > lay_motion.x * lay_motion.z) { lay_motion = vec3<f32>(m, select(L.p0.z, 100.0, deep), select(1.0, w, through)); }
       }
       else { lay_blur = max(lay_blur, w * L.p0.x); }
       continue;
@@ -398,6 +418,8 @@ fn apply_layers(e0: vec3<f32>, g: array<f32, 12>, dist: f32, skin_w: f32, uv: ve
       case 4u: { t = op_basic(L, e); }
       case 5u: { let c = op_gradient_map(L, e); t = c.rgb; w *= c.a; }
       case 6u: { let c = op_gradient_fill(L, uv, aspect); t = c.rgb; w *= c.a; }
+      case 8u: { t = op_fog(L, e); }
+      case 9u: { t = op_light(L, e); }
       default: { }
     }
     // Blend If: judged on this layer's result and on the image under it (display brightness).

@@ -115,6 +115,9 @@ async function handle(m: ToWorker) {
     case "brightest":
       post({ type: "brightest", ...(await engine.brightestPoint()) });
       break;
+    case "depthField":
+      post({ type: "depthField", ...engine.depthField() });
+      break;
     case "mem":
       post({ type: "mem", ...engine.memStats() });
       break;

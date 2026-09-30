@@ -44,6 +44,8 @@ type Ctx = {
   /** Panels of their own in the dock (tone / contrast equalizers): element, shown, left. */
   toneEq?: { el: HTMLElement; render: () => void; leave: () => void };
   contrastEq?: { el: HTMLElement; render: () => void; leave: () => void };
+  /** A Motion Blur layer's settings are shown (its arrows go on the photo), or none is (undefined). */
+  motionGuide?: (b: LayerParams["blur"] | undefined) => void;
   /** The Film card: grain, halation, glow (src/ui/filmPanel.ts). */
   film?: { el: HTMLElement; render: () => void; leave: () => void };
   /** Taps on the photo pick what to mask (on, with a hint for the photo) or do what they normally do (off). */
@@ -60,7 +62,9 @@ type Ctx = {
 /** The cards that are not layers: always there, at the bottom of the stack. */
 type Fixed = "develop" | "toneEq" | "contrastEq" | "blur" | "film";
 
-const ADD: LayerType[] = ["curves", "hueSat", "basic", "blur", "gradientMap", "gradientFill", "brightContrast", "exposure"];
+const ADD: LayerType[] = ["curves", "hueSat", "basic", "blur", "fog", "light", "gradientMap", "gradientFill", "brightContrast", "exposure"];
+/** Fog colours: morning air, warm haze, city smog, dusk. */
+const FOG_COLORS = [{ id: "morning", color: "#cfd8e0" }, { id: "warm", color: "#e6d4bb" }, { id: "smog", color: "#b3aa9a" }, { id: "dusk", color: "#6f7d96" }] as const;
 
 
 /** A layer's name as shown: automatic layers in the interface language (unless renamed). */
@@ -319,10 +323,26 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
       case "blur": {
         const b = l.params as LayerParams["blur"];
         return [chips([{ id: "lens", label: t("blurl.lens") }, { id: "motion", label: t("blurl.motion") }] as const, b.motion ? "motion" : "lens", (v) => { b.motion = v === "motion"; edit(); renderProps(); }),
-          slider(t("blurl.amount"), 0, 1, 0.01, () => b.amount, (v) => (b.amount = v), (v) => `${Math.round(v * 100)}%`, 0.4),
+          slider(t("blurl.amount"), 0, b.motion ? 3 : 1, 0.01, () => b.amount, (v) => { b.amount = v; ctx.motionGuide?.(b); }, (v) => `${Math.round(v * 100)}%`, 0.4),
           ...(b.motion ? [toggleRow(t("blurl.depth"), t("blurl.depthNote"), () => !!b.depth, (v) => { b.depth = v; renderProps(); }),
-            ...(b.depth ? [] : [angleRow(t("blurl.angle"), () => b.angle ?? 0, (v) => (b.angle = v))])] : []),
+            ...(b.depth ? [toggleRow(t("blurl.through"), t("blurl.throughNote"), () => !!b.through, (v) => (b.through = v))] : []),
+            ...(b.depth ? [] : [angleRow(t("blurl.angle"), () => b.angle ?? 0, (v) => { b.angle = v; ctx.motionGuide?.(b); })])] : []),
           el("p", { class: "muted", text: t(b.motion ? "blurl.motionHint" : "blurl.hint") })];
+      }
+      case "fog": {
+        const f = l.params as LayerParams["fog"];
+        const pctv = (v: number) => `${Math.round(v * 100)}%`;
+        const current = FOG_COLORS.find((c) => c.color === f.color)?.id;
+        return [chips(FOG_COLORS.map((c) => ({ id: c.id, label: t(`fog.${c.id}`) })), current, (id) => { f.color = FOG_COLORS.find((c) => c.id === id)!.color; edit(); renderProps(); }),
+          slider(t("fog.amount"), 0, 1, 0.01, () => f.amount, (v) => (f.amount = v), pctv, 0.5),
+          slider(t("fog.start"), 0, 0.9, 0.01, () => f.start, (v) => (f.start = v), pctv, 0.45),
+          el("p", { class: "muted", text: t("fog.hint") })];
+      }
+      case "light": {
+        const g = l.params as LayerParams["light"];
+        return [slider(t("light.amount"), -1, 2, 0.01, () => g.amount, (v) => (g.amount = v), (v) => `${v > 0 ? "+" : ""}${v.toFixed(2)} EV`, 1),
+          slider(t("light.reach"), 0.05, 1, 0.01, () => g.reach, (v) => (g.reach = v), (v) => `${Math.round(v * 100)}%`, 0.6),
+          el("p", { class: "muted", text: t("light.hint") })];
       }
       case "brightContrast": {
         const b = l.params as LayerParams["brightContrast"];
@@ -742,6 +762,9 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
   function renderProps() {
     curvesUi = undefined;
     const l = sel();
+    // A Motion Blur layer's Adjust tab: its streaks drawn on the photo.
+    const mb = l?.type === "blur" && tab === "adjust" ? (l.params as LayerParams["blur"]) : undefined;
+    ctx.motionGuide?.(mb?.motion ? mb : undefined);
     if (!l) {
       if (selected !== "blur" && selected !== "toneEq" && selected !== "contrastEq" && selected !== "film") selected = "develop";
       if (selected !== "blur") ctx.leftBlur?.();

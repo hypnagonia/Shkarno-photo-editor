@@ -26,6 +26,8 @@ export const ICON = {
   exposure: "M4 4h16v16H4zM4 20 20 4M7 8h4M9 6v4M13 16h4",
   gradientMap: "M3 7h18v7H3zM7 14v3M12 14v3M17 14v3M9 7v7M15 7v7",
   gradientFill: "M4 4h16v16H4zM4 9h16M4 13h16M4 16.5h16M4 19h16",
+  fog: "M3 8c2-1.5 4-1.5 6 0s4 1.5 6 0 4-1.5 6 0M3 13c2-1.5 4-1.5 6 0s4 1.5 6 0 4-1.5 6 0M5 18c2-1.5 4-1.5 6 0s4 1.5 6 0",
+  light: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z",
 } as const;
 export type IconName = keyof typeof ICON;
 

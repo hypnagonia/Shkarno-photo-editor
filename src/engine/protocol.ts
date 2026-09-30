@@ -81,6 +81,8 @@ export type ToWorker =
   | { type: "mem" }
   /** Where the light probably is (a lens flare's default position). */
   | { type: "brightest" }
+  /** The depth map, coarse, and where the photo recedes to (motion blur's arrows on the photo). */
+  | { type: "depthField" }
   /** What is under a tap on the photo (x, y: 0…1 of the picture), for building a mask from it. */
   | { type: "pick"; x: number; y: number; /** The layer (index among the live layers) whose mask the tap edits. */ layer?: number; /** A tap selects an object (tap-to-select). */ object?: boolean }
   | { type: "reference"; file: File; mode: "create" | "match"; amount: number }
@@ -116,6 +118,8 @@ export type FromWorker =
   | { type: "check"; items: CheckItem[]; rgba: Uint8Array; w: number; h: number }
   | { type: "mem"; liveMB: number; peakMB: number }
   | { type: "brightest"; x: number; y: number }
+  /** Distance 0…1 on a w × h grid (rows top to bottom), and the vanishing point (0…1). */
+  | { type: "depthField"; w: number; h: number; data: number[]; vanish: [number, number] }
   /** A worked-out fix for a finding of the last check; `done` when there are no more. */
   | { type: "checkFix"; id?: CheckItem["id"]; fix?: FixChange[]; partial?: boolean; done?: boolean }
   | { type: "lookProfile"; profile: LookProfile; reference: ColorStats; message: string }

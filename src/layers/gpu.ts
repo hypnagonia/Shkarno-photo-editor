@@ -138,7 +138,14 @@ export function packLayers(layers: Layer[], autoStrength = 1, enable?: { curves?
         rows.push(cachedRow("g" + JSON.stringify(g.gradient), () => gradientTable(g.gradient, ATLAS_W)));
         break;
       }
-      case "blur": { const b = l.params as LayerParams["blur"]; p[0] = Math.max(0, b.amount); p[1] = b.motion ? 1 : 0; p[2] = ((b.angle ?? 0) * Math.PI) / 180; p[3] = b.depth ? 1 : 0; break; }
+      case "blur": { const b = l.params as LayerParams["blur"]; p[0] = Math.max(0, b.amount); p[1] = b.motion ? 1 : 0; p[2] = ((b.angle ?? 0) * Math.PI) / 180; p[3] = b.depth ? 1 : 0; p[4] = b.through ? 1 : 0; break; }
+      case "fog": {
+        const f = l.params as LayerParams["fog"];
+        const c = p3Linear(f.color);
+        p[0] = Math.max(0, f.amount); p[1] = Math.min(0.98, Math.max(0, f.start)); p[4] = c[0]; p[5] = c[1]; p[6] = c[2];
+        break;
+      }
+      case "light": { const g = l.params as LayerParams["light"]; p[0] = g.amount; p[1] = Math.max(0.02, g.reach); break; }
       case "brightContrast": { const b = l.params as LayerParams["brightContrast"]; p[0] = b.brightness; p[1] = b.contrast; break; }
       case "exposure": { const e = l.params as LayerParams["exposure"]; p[0] = e.exposure; p[1] = e.offset; p[2] = e.gamma; break; }
       case "basic": {
@@ -160,4 +167,16 @@ export function hasBlurLayers(layers: Layer[], autoStrength = 1, enable?: { curv
 /** Whether any visible motion Blur layer blurs something (the renderer then runs the motion pass). */
 export function hasMotionLayers(layers: Layer[], autoStrength = 1, enable?: { curves?: boolean; semantic?: boolean }): boolean {
   return liveLayers(layers, autoStrength, enable).some((l) => l.type === "blur" && (l.params as LayerParams["blur"]).amount > 0 && !!(l.params as LayerParams["blur"]).motion);
+}
+
+/** A hex colour (sRGB) as linear Display P3, the space the layers mix light in. */
+function p3Linear(hex: string): [number, number, number] {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  const v = m ? parseInt(m[1], 16) : 0xcccccc;
+  const lin = [(v >> 16) & 255, (v >> 8) & 255, v & 255].map((c) => { const x = c / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; });
+  return [
+    0.8224621 * lin[0] + 0.1775380 * lin[1],
+    0.0331942 * lin[0] + 0.9668058 * lin[1],
+    0.0170827 * lin[0] + 0.0723974 * lin[1] + 0.9105199 * lin[2],
+  ];
 }

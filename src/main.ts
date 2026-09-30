@@ -9,6 +9,8 @@ import { createContrastEqPanel } from "./ui/contrastEqPanel.ts";
 import { createFilmPanel } from "./ui/filmPanel.ts";
 import { keepRuntimeWhenIdle } from "./pwa.ts";
 import logoSvg from "../public/logo.svg?raw";
+import { motionArrows } from "./layers/motion.ts";
+import type { LayerParams } from "./layers/model.ts";
 import { clearFeedback, feedbackBlob, feedbackCount, recordEdit } from "./ui/autoFeedback.ts";
 import { DEPTH_BANDS, defaultParams, type Decision, type DepthBand, type Params } from "./decision/params.ts";
 import { createLookPanel } from "./ui/lookPanel.ts";
@@ -91,7 +93,10 @@ const empty = el("div", { class: "empty" },
   el("button", { class: "btn primary", id: "open-btn", text: t("empty.open") }),
   el("p", { class: "muted fine", text: t("empty.fine") }),
 );
-stage.append(empty, canvas, rings, badge, progress, fileInput);
+// Motion blur's arrows on the photo, while a Motion Blur layer is being adjusted.
+const motionSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+motionSvg.classList.add("motion-guide");
+stage.append(empty, canvas, rings, motionSvg, badge, progress, fileInput);
 canvas.style.display = "none";
 
 // The editor (src/ui/editor/layersPanel.ts): a dock with the layer stack (top first,
@@ -505,7 +510,50 @@ function shownFocusPoints(): Array<{ x: number; y: number; auto?: boolean }> {
 }
 
 /** One ring per focus point; numbered so several subjects can be told apart. */
+let motionGuide: LayerParams["blur"] | undefined;
+/** This photo's coarse depth and vanishing point (asked once, when the arrows are first drawn). */
+let depthField: { w: number; h: number; data: number[]; vanish: [number, number] } | undefined;
+let depthAsked = false;
+/**
+ * Arrows over the photo: which way and how far each part streaks — along the direction,
+ * or away from the vanishing point into the depth; longer where things are nearer.
+ */
+function renderMotionGuide() {
+  const b = motionGuide;
+  if (!b || !params) { if (motionSvg.childElementCount) motionSvg.replaceChildren(); return; }
+  if (!depthField) {
+    if (!depthAsked) {
+      depthAsked = true;
+      void askEngine({ type: "depthField" }, (m) => (m.type === "depthField" ? m : undefined), undefined).then((f) => { depthField = f ?? { w: 1, h: 1, data: [0.5], vanish: [0.5, 0.5] }; renderMotionGuide(); });
+    }
+    return;
+  }
+  const r = imageRect(), st = stage.getBoundingClientRect();
+  const long = Math.max(r.width, r.height);
+  const cols = r.width >= r.height ? 7 : 5, rows = Math.max(3, Math.round((cols * r.height) / r.width));
+  const cell = Math.min(r.width / cols, r.height / rows);
+  const ns = "http://www.w3.org/2000/svg";
+  const g = document.createElementNS(ns, "g");
+  let d = "";
+  for (const a of motionArrows(b, depthField, cols, rows, r.width / r.height)) {
+    const L = Math.min(a.len * long, cell * 0.9);
+    if (L < 3) continue;
+    const cx = r.left - st.left + a.x * r.width, cy = r.top - st.top + a.y * r.height;
+    const x0 = cx - (a.dx * L) / 2, y0 = cy - (a.dy * L) / 2, x1 = cx + (a.dx * L) / 2, y1 = cy + (a.dy * L) / 2;
+    const h = Math.min(7, L * 0.35), px = -a.dy, py = a.dx;
+    const head = (x: number, y: number, s: number) => `M${x - s * a.dx * h + px * h * 0.6} ${y - s * a.dy * h + py * h * 0.6}L${x} ${y}L${x - s * a.dx * h - px * h * 0.6} ${y - s * a.dy * h - py * h * 0.6}`;
+    d += `M${x0} ${y0}L${x1} ${y1}` + head(x1, y1, 1) + (b.depth ? "" : head(x0, y0, -1));
+  }
+  for (const [cls, w] of [["shade", 3], ["line", 1.3]] as const) {
+    const p = document.createElementNS(ns, "path");
+    p.setAttribute("d", d); p.setAttribute("class", cls); p.setAttribute("stroke-width", String(w));
+    g.append(p);
+  }
+  motionSvg.replaceChildren(g);
+}
+
 function renderRings() {
+  renderMotionGuide();
   // Rings are an editing aid: only shown while picking focus points.
   const pts = shownFocusPoints();
   if (!pts.length && !rings.childElementCount) return; // nothing to draw: no layout reads (pinch / pan call this per move)
@@ -1093,6 +1141,7 @@ const layersPanel = createLayersPanel(dockEl, propsEl, {
   toneEq: toneEqPanel,
   contrastEq: contrastEqTab,
   film: filmPanel,
+  motionGuide: (b) => { motionGuide = b; renderMotionGuide(); },
   photoColors: () => askEngine({ type: "palette" }, (m) => (m.type === "palette" ? m.stats.palette.map((w) => w.hex) : undefined), [] as string[]),
   notice: (text) => { badge.textContent = text; badge.classList.add("on"); },
   brightest: () => askEngine({ type: "brightest" }, (m) => (m.type === "brightest" ? { x: m.x, y: m.y } : undefined), { x: 0.3, y: 0.2 }),
@@ -1700,6 +1749,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       busy = false;
       break;
     case "analysis":
+      depthField = undefined; depthAsked = false; // a new photo's depth
       keepRuntimeWhenIdle(); // the analysis used ONNX Runtime: keep it for offline use
       checkResult = undefined; checkStale = true; renderCheck();
       noteAnalysisStage();

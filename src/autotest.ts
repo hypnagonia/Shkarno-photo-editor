@@ -138,6 +138,12 @@ export async function runAutotest(app: AutotestApp) {
         app.pushParams(); await done; await settle();
         if (q.has("save")) await saveExport("classic");
       }
+      else if (s === "fog" || s === "light") {
+        // A Fog / Light layer over the whole photo at its defaults, exported as fog / light (then removed).
+        await addLayer(s, makeLayer(s, `Autotest ${s}`));
+        if (q.has("save")) await saveExport(s);
+        const p = app.params(); if (p) { p.layers = p.layers.filter((l) => l.name !== `Autotest ${s}`); app.pushParams(); await settle(); }
+      }
       else if (s.startsWith("film-")) {
         // A film character at full strength on 35 mm (film-clean, film-negative, film-cinema), exported as film-<character>.
         const p = app.params(); if (!p) throw new Error("no photo");
@@ -216,8 +222,8 @@ export async function runAutotest(app: AutotestApp) {
       else if (s === "select") await addLayer("select", makeLayer("basic", "Autotest select", { mask: center, params: { exposure: 0.4, temp: 0, tint: 0, saturation: 0, vibrance: 0, hue: 0 } }));
       else if (s === "blur") await addLayer("blur", makeLayer("blur", "Autotest blur", { mask: { ...center, invert: true }, params: { amount: 0.5 } }));
       else if (s === "motion") {
-        // Motion blur of everything but the picked subject (?angle=, default horizontal; ?parallax: by depth), exported as motion.
-        await addLayer("motion", makeLayer("blur", "Autotest motion", { mask: { ...center, invert: true }, params: { amount: 0.6, motion: true, angle: Number(q.get("angle") ?? 0), depth: q.has("parallax") } }));
+        // Motion blur of everything but the picked subject (?angle=, default horizontal; ?parallax: into the depth; ?through: through the mask), exported as motion.
+        await addLayer("motion", makeLayer("blur", "Autotest motion", { mask: { ...center, invert: true }, params: { amount: 0.6, motion: true, angle: Number(q.get("angle") ?? 0), depth: q.has("parallax"), through: q.has("through") } }));
         if (q.has("save")) await saveExport("motion");
       }
       else if (s === "export") {
