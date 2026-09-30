@@ -73,6 +73,7 @@ export const pt: Dict = {
   "flare.glow": "Reflexo · brilho",
   "flare.streak": "Reflexo · raio",
   "flare.ghost": "Reflexo · fantasma",
+  "flare.color": "Cor",
   "flare.tapLight": "Toque na luz (sol, lâmpada)",
   "flare.move": "Mover a luz",
   "flare.remove": "Remover reflexo",

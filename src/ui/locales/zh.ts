@@ -73,6 +73,7 @@ export const zh: Dict = {
   "flare.glow": "光晕 · 辉光",
   "flare.streak": "光晕 · 光条",
   "flare.ghost": "光晕 · 鬼影",
+  "flare.color": "颜色",
   "flare.tapLight": "点按光源（太阳、灯）",
   "flare.move": "移动光源",
   "flare.remove": "移除光晕",

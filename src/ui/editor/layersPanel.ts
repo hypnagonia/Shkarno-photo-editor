@@ -22,6 +22,7 @@ import { createToneCurves } from "../toneCurves.ts";
 import { t, tOr } from "../i18n.ts";
 import { icon } from "./icons.ts";
 import { createGradientEditor } from "./gradientEditor.ts";
+import { recolor } from "../../layers/gradient.ts";
 import { defaultShape, liveLayers } from "../../layers/gpu.ts";
 import { flareLayers, flareLight, moveFlare } from "../../layers/flare.ts";
 import { el } from "../dom.ts";
@@ -325,7 +326,15 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
       case "gradientFill": {
         const g = l.params as LayerParams["gradientFill"];
         const pctv = (v: number) => `${Math.round(v * 100)}%`;
-        return [createGradientEditor(() => g, (label) => edit(label), slider, { photoColors: ctx.photoColors }),
+        // A flare's part: one colour for the whole of it (its fade kept), before the full editor.
+        const flareColor: HTMLElement[] = [];
+        if (l.flare) {
+          const input = el("input", { type: "color", class: "grad-color", value: (g.gradient.stops[0]?.color ?? "#ffffff").toLowerCase(), "aria-label": t("flare.color") });
+          input.oninput = () => { g.gradient = recolor(g.gradient, input.value.toUpperCase()); g.preset = undefined; edit(); };
+          input.onchange = () => { edit(t("flare.color")); renderProps(); };
+          flareColor.push(el("div", { class: "grad-stoprow" }, el("label", { text: t("flare.color") }), el("label", { class: "grad-colorwrap" }, input)));
+        }
+        return [...flareColor, createGradientEditor(() => g, (label) => edit(label), slider, { photoColors: ctx.photoColors }),
           el("div", { class: "group-title", text: t("grad.shape") }),
           chips([{ id: "linear", label: t("grad.linear") }, { id: "radial", label: t("grad.radial") }] as const, g.style, (v) => { g.style = v; edit(); renderProps(); }),
           ...(g.style === "linear" ? [slider(t("grad.angle"), -180, 180, 1, () => g.angle, (v) => (g.angle = v), (v) => `${Math.round(v)}°`, 90)] : []),

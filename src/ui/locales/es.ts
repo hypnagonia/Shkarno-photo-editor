@@ -73,6 +73,7 @@ export const es: Dict = {
   "flare.glow": "Destello · brillo",
   "flare.streak": "Destello · raya",
   "flare.ghost": "Destello · fantasma",
+  "flare.color": "Color",
   "flare.tapLight": "Toca la luz (sol, lámpara)",
   "flare.move": "Mover la luz",
   "flare.remove": "Quitar destello",

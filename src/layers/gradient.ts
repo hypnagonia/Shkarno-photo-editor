@@ -135,6 +135,26 @@ export function gradientFrom(colors: string[], space?: Gradient["space"]): Gradi
   if (space) g.space = space;
   return g;
 }
+/**
+ * A palette laid over a gradient that fades (any stop not fully opaque): its colours, the
+ * old gradient's opacity. Stops at the old positions (so the fade keeps its exact shape:
+ * a flare's ghost stays a soft disc, a graduated filter still fades out) and at the
+ * palette's own (so none of its colours is lost). A gradient that never fades: the palette as it is.
+ */
+export function withAlphaOf(next: Gradient, prev: Gradient): Gradient {
+  if (prev.stops.every((s) => s.alpha >= 0.999)) return next;
+  const at = new Map<number, number>();
+  for (const s of [...prev.stops, ...next.stops]) at.set(Math.round(s.pos * 1e4) / 1e4, 0);
+  const stops = [...at.keys()].sort((a, b) => a - b).map((pos) => {
+    const c = gradientAt(next, pos);
+    return { pos, color: rgbToHex(c[0], c[1], c[2]), alpha: Math.round(gradientAt(prev, pos)[3] * 1000) / 1000 };
+  });
+  return { ...next, stops };
+}
+/** Every stop in one colour, each keeping its opacity (a flare's ghost, glow or streak recoloured). */
+export function recolor(g: Gradient, color: string): Gradient {
+  return { ...g, stops: g.stops.map((s) => ({ ...s, color })) };
+}
 export const presetGradient = (id: string, space?: Gradient["space"]): Gradient => gradientFrom(GRADIENT_PRESETS.find((p) => p.id === id)?.colors ?? ["#000000", "#FFFFFF"], space);
 
 export function hexToRgb(hex: string): [number, number, number] {

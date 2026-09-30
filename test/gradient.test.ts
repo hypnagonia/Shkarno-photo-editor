@@ -81,3 +81,18 @@ test("palettes are colours, not a ramp to black and white", () => {
   // The Palettes group: 3–5 colours each.
   for (const pr of GRADIENT_PRESETS.filter((q) => q.group === "palettes")) assert.ok(pr.colors.length >= 3 && pr.colors.length <= 5, pr.id);
 });
+
+test("a palette over a fading gradient keeps the fade", async () => {
+  const { withAlphaOf, gradientFrom, gradientAt, recolor } = await import("../src/layers/gradient.ts");
+  const ghost = { space: "oklab" as const, stops: [{ pos: 0, color: "#7FD6FF", alpha: 0.38 }, { pos: 0.7, color: "#7FD6FF", alpha: 0.26 }, { pos: 1, color: "#7FD6FF", alpha: 0 }] };
+  const g = withAlphaOf(gradientFrom(["#FF0000", "#00FF00", "#0000FF"], "oklab"), ghost);
+  for (const x of [0, 0.3, 0.7, 0.85, 1]) assert.ok(Math.abs(gradientAt(g, x)[3] - gradientAt(ghost, x)[3]) < 0.002, `alpha at ${x}`);
+  assert.equal(gradientAt(g, 1)[3], 0);
+  assert.equal(g.stops.find((s) => s.pos === 0)?.color, "#FF0000");
+  // Opaque before: the palette as it is.
+  const opaque = gradientFrom(["#000000", "#FFFFFF"]);
+  assert.equal(withAlphaOf(gradientFrom(["#FF0000", "#0000FF"]), opaque).stops.length, 2);
+  // One colour: every stop, opacities kept.
+  const r = recolor(ghost, "#FFAA00");
+  assert.deepEqual(r.stops.map((s) => [s.color, s.alpha]), [["#FFAA00", 0.38], ["#FFAA00", 0.26], ["#FFAA00", 0]]);
+});

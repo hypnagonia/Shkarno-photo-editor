@@ -9,7 +9,7 @@
  *             selected stop's colour, opacity and location
  */
 import {
-  GRADIENT_GROUPS, GRADIENT_PRESETS, HARMONY_RULES, gradientAt, gradientCss, gradientFrom, harmonyPalette, hexToOklch, oklchToHex, paletteCss, paletteFromColors, rgbToHex,
+  GRADIENT_GROUPS, GRADIENT_PRESETS, HARMONY_RULES, gradientAt, withAlphaOf, gradientCss, gradientFrom, harmonyPalette, hexToOklch, oklchToHex, paletteCss, paletteFromColors, rgbToHex,
   type Gradient, type HarmonyRule,
 } from "../../layers/gradient.ts";
 import { t } from "../i18n.ts";
@@ -37,7 +37,8 @@ export function createGradientEditor(target: () => Target, changed: (label?: str
   /** A palette becomes the gradient: a fresh copy (later edits must not change the source), smooth interpolation. */
   const apply = (colors: string[], preset: string | undefined, label: string) => {
     const tg = target();
-    tg.gradient = gradientFrom(colors, "oklab"); tg.preset = preset; selected = 0;
+    // (Over a gradient that fades, the fade stays: only the colours change.)
+    tg.gradient = withAlphaOf(gradientFrom(colors, "oklab"), tg.gradient); tg.preset = preset; selected = 0;
     changed(label);
     render();
   };

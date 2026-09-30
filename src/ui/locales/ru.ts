@@ -73,6 +73,7 @@ export const ru: Dict = {
   "flare.glow": "Блик · свечение",
   "flare.streak": "Блик · луч",
   "flare.ghost": "Блик · отражение",
+  "flare.color": "Цвет",
   "flare.tapLight": "Нажмите на источник света (солнце, лампу)",
   "flare.move": "Переместить свет",
   "flare.remove": "Удалить блик",

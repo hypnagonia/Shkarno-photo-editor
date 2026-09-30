@@ -78,6 +78,7 @@ export const en = {
   "flare.glow": "Flare · glow",
   "flare.streak": "Flare · streak",
   "flare.ghost": "Flare · ghost",
+  "flare.color": "Colour",
   "flare.tapLight": "Tap the light (sun, lamp)",
   "flare.move": "Move light",
   "flare.remove": "Remove flare",
