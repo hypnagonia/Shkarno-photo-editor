@@ -124,11 +124,12 @@ export interface LayerParams {
    */
   gradientFill: { gradient: Gradient; style: "linear" | "radial"; angle: number; scale: number; x: number; y: number; reverse: boolean; preset?: string };
   /**
-   * Blur: a lens-like blur of what the mask covers (the depth-of-field gather, so
-   * nearer, sharper things keep clean edges). `amount` 1 = a radius of 3 % of the
-   * picture's long side.
+   * Blur of what the mask covers. Lens (default): the depth-of-field gather, so nearer,
+   * sharper things keep clean edges; `amount` 1 = a radius of 3 % of the picture's long
+   * side. Motion: streaks along `angle` (degrees, 0 = horizontal, 90 = vertical), as a
+   * moving subject or a panned camera; `amount` 1 = a streak of 6 % of the long side.
    */
-  blur: { amount: number };
+  blur: { amount: number; motion?: boolean; angle?: number };
 }
 
 export interface Layer<T extends LayerType = LayerType> {

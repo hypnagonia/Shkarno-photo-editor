@@ -15,13 +15,14 @@ import layersWgsl from "../gpu/shaders/layers.wgsl?raw";
 import { TONE_EQ_DETAIL, toneEqActive, toneEqLut } from "../tone/toneEq.ts";
 import { contrastEqActive, edgeSigma, levels, stripApron, type ContrastEq } from "../tone/contrastEq.ts";
 import ceqWgsl from "../gpu/shaders/render_ceq.wgsl?raw";
-import { ATLAS_W, hasBlurLayers, packLayers, RECORD } from "../layers/gpu.ts";
+import { ATLAS_W, hasBlurLayers, hasMotionLayers, packLayers, RECORD } from "../layers/gpu.ts";
 import type { MaskShape } from "../layers/model.ts";
 import detailWgsl from "../gpu/shaders/render_detail.wgsl?raw";
 import dofWgsl from "../gpu/shaders/render_dof.wgsl?raw";
 import outputWgsl from "../gpu/shaders/output.wgsl?raw";
 import grainWgsl from "../gpu/shaders/render_grain.wgsl?raw";
 import filmWgsl from "../gpu/shaders/render_film.wgsl?raw";
+import motionWgsl from "../gpu/shaders/render_motion.wgsl?raw";
 import filmGlowWgsl from "../gpu/shaders/film_glow.wgsl?raw";
 import { filmOf, filmUniforms } from "../film/film.ts";
 import gainmapWgsl from "../gpu/shaders/render_gainmap.wgsl?raw";
@@ -296,7 +297,7 @@ export class Renderer {
   }
 
   private toneDispatch(enc: GPUCommandEncoder, temp: Array<GPUBuffer | GPUTexture>, src: RenderSource, maps: RefinedMaps, p: Params, o: RenderOptions,
-    lutSize: number, lutOn: boolean, profileOn: boolean, dst: GPUTexture, distT: GPUTexture, ty0: number, th: number, gainT?: GPUTexture) {
+    lutSize: number, lutOn: boolean, profileOn: boolean, dst: GPUTexture, distT: GPUTexture, ty0: number, th: number, gainT?: GPUTexture, motionT?: GPUTexture) {
     const gpu = this.gpu;
     // Tone uniforms followed by the target rectangle (tgt: offset x/y, width, height).
     const base = this.toneUniforms(p, src, maps, o, lutSize, lutOn);
@@ -342,6 +343,7 @@ export class Renderer {
       (gainT ?? this.target("gainDummy", 1, 1, "r32float")).createView(),
       this.layerBuf!,
       (this.selection?.tex ?? this.noSelection()).createView({ dimension: "2d-array" }),
+      (motionT ?? this.target("motionDummy", 1, 1, "rg32float")).createView(),
     ], Math.ceil(src.width / 8), Math.ceil(th / 8));
   }
 
@@ -361,10 +363,12 @@ export class Renderer {
     const depthDof = dofOn && p.dof.strength > 0;
     const blurR = ((o.debugView ?? 0) < 7 || o.debugView === 11) && hasBlurLayers(p.layers ?? [], p.autoCurves ?? 1, p.enable) ? 0.03 * Math.max(W, H) : 0;
     const dof = depthDof || blurR > 0;
+    // Motion Blur layers: a streak of 6 % of the long side at amount 1.
+    const motionR = ((o.debugView ?? 0) < 7 || o.debugView === 11) && hasMotionLayers(p.layers ?? [], p.autoCurves ?? 1, p.enable) ? 0.06 * Math.max(W, H) : 0;
     const maxRadius = depthDof ? p.dof.strength * 0.022 * Math.max(W, H) : 0;
     const y0 = strip?.y0 ?? 0, rows = strip?.rows ?? H;
     const ceqOn = contrastEqActive(p.contrastEq) && (o.debugView ?? 0) < 7;
-    const apron = strip ? Math.max(dof ? Math.ceil(Math.max(maxRadius, blurR)) + 4 : 3, ceqOn ? stripApron(W / src.fullWidth) : 0) : 0;
+    const apron = strip ? Math.max(dof ? Math.ceil(Math.max(maxRadius, blurR)) + 4 : 3, ceqOn ? stripApron(W / src.fullWidth) : 0, motionR > 0 ? Math.ceil(motionR / 2) + 4 : 0) : 0;
     // Strip starts are aligned to 64 rows so the depth-of-field mip grid (up to
     // 2^5-row texels) lines up with the full-image grid: no seams between strips.
     // Heights are rounded up to 64 rows too (mip level sizes round down, so an
@@ -378,9 +382,10 @@ export class Renderer {
     const t2 = this.target("detail", W, th, "rgba16float");
     const gainT = hdrStops > 0 ? this.target("gain", W, th, "r32float") : undefined;
     const distT = dof ? this.target("dist", W, th, "r32float") : this.target("distDummy", 1, 1, "r32float");
+    const motionT = motionR > 0 ? this.target("motion", W, th, "rg32float") : undefined;
     const scale = W / src.fullWidth;
     await gpu.run("render.tone+detail", (enc, temp) => {
-      this.toneDispatch(enc, temp, src, maps, p, o, lutSize, !identity, p.enable.lut && !isNeutral(p.profile), t1, distT, ty0, th, gainT);
+      this.toneDispatch(enc, temp, src, maps, p, o, lutSize, !identity, p.enable.lut && !isNeutral(p.profile), t1, distT, ty0, th, gainT, motionT);
       if (ceqOn) this.contrastEq(enc, temp, p.contrastEq!, t1, t2, W, th, scale);
       // Sharpening radius is defined at full resolution; a preview sees it scaled.
       const radius = p.sharpen.radius * Math.max(scale, 0.35);
@@ -395,6 +400,15 @@ export class Renderer {
       // Into the tone target: free once the detail pass has read it (saves a full-size buffer).
       final = await this.depthOfField(t2, t1, distT, W, th, p, maxRadius, dofLevels, blurR, depthDof);
       finalLinear = true;
+    }
+    if (motionT) {
+      const out = final === t1 ? t2 : t1;
+      await gpu.run("render.motion", (enc, temp) => {
+        const u = gpu.uniform(new Uniforms(8).u32(W, th, finalLinear ? 1 : 0, 0).f32(motionR, 0, 0, 0).bytes(), "motion.u");
+        temp.push(u);
+        gpu.dispatch(enc, gpu.pipeline("render.motion", motionWgsl), [u, final.createView(), motionT.createView(), this.sampler, out.createView()], Math.ceil(W / 8), Math.ceil(th / 8));
+      });
+      final = out;
     }
     const film = filmOf(p);
     const fu = film && o.debugView !== 1 && o.debugView !== 2 && (o.debugView ?? 0) < 7 ? filmUniforms(film, Math.max(src.fullWidth, (H / scale))) : undefined;

@@ -138,7 +138,7 @@ export function packLayers(layers: Layer[], autoStrength = 1, enable?: { curves?
         rows.push(cachedRow("g" + JSON.stringify(g.gradient), () => gradientTable(g.gradient, ATLAS_W)));
         break;
       }
-      case "blur": { p[0] = Math.max(0, (l.params as LayerParams["blur"]).amount); break; }
+      case "blur": { const b = l.params as LayerParams["blur"]; p[0] = Math.max(0, b.amount); p[1] = b.motion ? 1 : 0; p[2] = ((b.angle ?? 0) * Math.PI) / 180; break; }
       case "brightContrast": { const b = l.params as LayerParams["brightContrast"]; p[0] = b.brightness; p[1] = b.contrast; break; }
       case "exposure": { const e = l.params as LayerParams["exposure"]; p[0] = e.exposure; p[1] = e.offset; p[2] = e.gamma; break; }
       case "basic": {
@@ -153,7 +153,11 @@ export function packLayers(layers: Layer[], autoStrength = 1, enable?: { curves?
   return { records, count: live.length, atlas, rows: Math.max(1, rows.length) };
 }
 
-/** Whether any visible Blur layer blurs something (the renderer then runs the blur pass). */
+/** Whether any visible lens Blur layer blurs something (the renderer then runs the blur pass). */
 export function hasBlurLayers(layers: Layer[], autoStrength = 1, enable?: { curves?: boolean; semantic?: boolean }): boolean {
-  return liveLayers(layers, autoStrength, enable).some((l) => l.type === "blur" && (l.params as LayerParams["blur"]).amount > 0);
+  return liveLayers(layers, autoStrength, enable).some((l) => l.type === "blur" && (l.params as LayerParams["blur"]).amount > 0 && !(l.params as LayerParams["blur"]).motion);
+}
+/** Whether any visible motion Blur layer blurs something (the renderer then runs the motion pass). */
+export function hasMotionLayers(layers: Layer[], autoStrength = 1, enable?: { curves?: boolean; semantic?: boolean }): boolean {
+  return liveLayers(layers, autoStrength, enable).some((l) => l.type === "blur" && (l.params as LayerParams["blur"]).amount > 0 && !!(l.params as LayerParams["blur"]).motion);
 }

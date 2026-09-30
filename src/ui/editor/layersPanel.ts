@@ -281,8 +281,10 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
       }
       case "blur": {
         const b = l.params as LayerParams["blur"];
-        return [slider(t("blurl.amount"), 0, 1, 0.01, () => b.amount, (v) => (b.amount = v), (v) => `${Math.round(v * 100)}%`, 0.4),
-          el("p", { class: "muted", text: t("blurl.hint") })];
+        return [chips([{ id: "lens", label: t("blurl.lens") }, { id: "motion", label: t("blurl.motion") }] as const, b.motion ? "motion" : "lens", (v) => { b.motion = v === "motion"; edit(); renderProps(); }),
+          slider(t("blurl.amount"), 0, 1, 0.01, () => b.amount, (v) => (b.amount = v), (v) => `${Math.round(v * 100)}%`, 0.4),
+          ...(b.motion ? [slider(t("blurl.angle"), -90, 90, 1, () => b.angle ?? 0, (v) => (b.angle = v), (v) => `${Math.round(v)}°`, 0)] : []),
+          el("p", { class: "muted", text: t(b.motion ? "blurl.motionHint" : "blurl.hint") })];
       }
       case "brightContrast": {
         const b = l.params as LayerParams["brightContrast"];

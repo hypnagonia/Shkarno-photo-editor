@@ -84,6 +84,8 @@ var<private> lay_bw: vec3<f32>;
 var<private> lay_dist: f32;
 /** How much Blur layers blur this pixel (0…1, the strongest wins): handed to the blur pass. */
 var<private> lay_blur: f32 = 0.0;
+/** Motion Blur layers here: (amount, angle in radians) of the strongest, for the motion pass. */
+var<private> lay_motion: vec2<f32> = vec2<f32>(0.0, 0.0);
 /** OkLab of the colour before the layers, for colour masks (computed once, on first use). */
 var<private> lay_lab: vec3<f32>;
 var<private> lay_lab_ok: bool = false;
@@ -375,7 +377,11 @@ fn apply_layers(e0: vec3<f32>, g: array<f32, 12>, dist: f32, skin_w: f32, uv: ve
     // pixel by under half a level of 255, so it is skipped (most region layers, most pixels).
     if (w < 2e-3) { continue; }
     // Blur: no colour change here; the blur pass does it, by this amount.
-    if (u32(L.a.x) == 7u) { lay_blur = max(lay_blur, w * L.p0.x); continue; }
+    if (u32(L.a.x) == 7u) {
+      if (L.p0.y > 0.5) { if (w * L.p0.x > lay_motion.x) { lay_motion = vec2<f32>(w * L.p0.x, L.p0.z); } }
+      else { lay_blur = max(lay_blur, w * L.p0.x); }
+      continue;
+    }
     var t = e;
     switch u32(L.a.x) {
       case 0u: { t = op_curves(L, e); }

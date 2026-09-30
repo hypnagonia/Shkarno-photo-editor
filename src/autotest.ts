@@ -215,6 +215,11 @@ export async function runAutotest(app: AutotestApp) {
       else if (s === "reopen") await open("reopen");
       else if (s === "select") await addLayer("select", makeLayer("basic", "Autotest select", { mask: center, params: { exposure: 0.4, temp: 0, tint: 0, saturation: 0, vibrance: 0, hue: 0 } }));
       else if (s === "blur") await addLayer("blur", makeLayer("blur", "Autotest blur", { mask: { ...center, invert: true }, params: { amount: 0.5 } }));
+      else if (s === "motion") {
+        // Motion blur of everything but the picked subject (?angle=, default horizontal), exported as motion.
+        await addLayer("motion", makeLayer("blur", "Autotest motion", { mask: { ...center, invert: true }, params: { amount: 0.6, motion: true, angle: Number(q.get("angle") ?? 0) } }));
+        if (q.has("save")) await saveExport("motion");
+      }
       else if (s === "export") {
         await mem();
         await report("export:start");
