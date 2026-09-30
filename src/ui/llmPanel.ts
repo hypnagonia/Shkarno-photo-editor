@@ -104,7 +104,7 @@ const curveText = (c: CurvePoint[]) => JSON.stringify(c.map((q) => [r3(q.x), r3(
 /** The prompt: context, parameters, looks, answer format. Always in English (it is for the model). */
 export function buildPrompt(p: Params, auto: Params | undefined, s: Summary | undefined, decisions: Decision[], looks: Array<{ id: string; name: string; description: string }>, goal: string, cells?: Record<string, number>): string {
   const L: string[] = [];
-  L.push("You are a photo editor adjusting a photograph in a raw development app (\"Shikarno\"). I will show you the current rendering (attached image, if any), the measurements the app made, and every parameter you can change. Propose changes that make this photograph look its best" + (goal.trim() ? " while following my request below." : "."));
+  L.push("You are a photo editor adjusting a photograph in a raw development app (\"Shkarno\"). I will show you the current rendering (attached image, if any), the measurements the app made, and every parameter you can change. Propose changes that make this photograph look its best" + (goal.trim() ? " while following my request below." : "."));
   if (goal.trim()) L.push("", "## My request", goal.trim());
   L.push("", "## How the app renders",
     "Pipeline: denoise → white balance → dehaze → exposure → local tone mapping (compression, shadows/highlights, clarity, texture) → display tone curve (contrast, blacks, whites, rolloff) → user curves → saturation/vibrance and per-region colour → look profile (creative grade) → sharpening.",

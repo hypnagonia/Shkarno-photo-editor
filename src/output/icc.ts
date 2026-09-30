@@ -56,7 +56,7 @@ export function buildIcc(which: "srgb" | "p3"): Uint8Array {
   const col = (c: number) => xyzTag(M[c], M[3 + c], M[6 + c]);
   const curve = curvTag();
   const tags: Array<[string, Uint8Array]> = [
-    ["desc", descTag(which === "srgb" ? "sRGB (Shikarno)" : "Display P3 (Shikarno)")],
+    ["desc", descTag(which === "srgb" ? "sRGB (Shkarno)" : "Display P3 (Shkarno)")],
     ["cprt", textTag("No copyright, use freely")],
     ["wtpt", xyzTag(0.9642, 1.0, 0.8249)],
     ["rXYZ", col(0)], ["gXYZ", col(1)], ["bXYZ", col(2)],

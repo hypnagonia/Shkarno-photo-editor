@@ -86,7 +86,7 @@ const num = (v: number) => String(Math.round(v * 1e6) / 1e6);
 
 export function buildXmpPrimary(gainLength: number): Uint8Array {
   const xml =
-    `<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Shikarno">` +
+    `<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Shkarno">` +
     `<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
     `<rdf:Description rdf:about="" xmlns:Container="http://ns.google.com/photos/1.0/container/" xmlns:Item="http://ns.google.com/photos/1.0/container/item/" xmlns:hdrgm="http://ns.adobe.com/hdr-gain-map/1.0/" hdrgm:Version="1.0">` +
     `<Container:Directory><rdf:Seq>` +
@@ -99,7 +99,7 @@ export function buildXmpPrimary(gainLength: number): Uint8Array {
 
 export function buildXmpGainMap(m: GainMapMeta): Uint8Array {
   const xml =
-    `<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Shikarno">` +
+    `<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Shkarno">` +
     `<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
     `<rdf:Description rdf:about="" xmlns:hdrgm="http://ns.adobe.com/hdr-gain-map/1.0/" hdrgm:Version="1.0"` +
     ` hdrgm:GainMapMin="${num(m.min)}" hdrgm:GainMapMax="${num(m.max)}" hdrgm:Gamma="${num(m.gamma)}"` +

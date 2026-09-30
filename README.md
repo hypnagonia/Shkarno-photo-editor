@@ -1,4 +1,4 @@
-# Shikarno
+# Shkarno
 
 On-device development of iPhone ProRAW/DNG and HEIC photographs in the browser:
 LibRaw (WebAssembly) decoding, WebGPU/WGSL processing,

@@ -1,4 +1,4 @@
-# Shikarno — engine and pipeline
+# Shkarno — engine and pipeline
 
 Client-side photo development for iPhone ProRAW/DNG and HEIC. Everything runs
 in the browser: decoding in WebAssembly, image processing in WebGPU (WGSL),

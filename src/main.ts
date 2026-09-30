@@ -44,7 +44,7 @@ const app = document.getElementById("app")!;
 // The mark: the wanderer from jenyadoesapps.com, painted in the ink colour (a CSS mask
 // over public/logo-mark.png), so it follows the theme.
 const logo = el("span", { class: "logo", "aria-hidden": "true" });
-const header = el("header", { class: "top" }, logo, el("h1", { text: "Shikarno" }));
+const header = el("header", { class: "top" }, logo, el("h1", { text: "Shkarno" }));
 const capsEl = el("div", { class: "caps", text: t("app.starting") });
 header.append(capsEl);
 // Language: "Auto" follows the browser; a pick is remembered on this device (the page reloads).

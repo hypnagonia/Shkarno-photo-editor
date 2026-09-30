@@ -6,7 +6,7 @@
 import type { PhotoMetadata } from "../decode/types.ts";
 import { IfdWriter, rational, T, tiffHeader, concat, type Entry } from "./tiffWriter.ts";
 
-export const SOFTWARE = "Shikarno";
+export const SOFTWARE = "Shkarno";
 
 function exifDate(d: Date): string {
   const p = (n: number, w = 2) => String(n).padStart(w, "0");

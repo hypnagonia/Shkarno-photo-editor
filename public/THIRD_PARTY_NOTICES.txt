@@ -1,4 +1,4 @@
-Shikarno — third-party components
+Shkarno — third-party components
 ==========================================
 
 All processing runs locally in the browser. Model weights are served from this
