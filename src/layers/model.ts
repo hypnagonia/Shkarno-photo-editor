@@ -133,18 +133,22 @@ export interface LayerParams {
    * hardly at all), as when moving into the scene; `angle` is then unused. `through`:
    * the streaks run through the mask's edge instead of stopping at it (the mask only
    * mixes the result in), so what it keeps sharp trails into the streaks around it.
+   * `vanish` (0…1): where the masked part recedes to — the far end of what the mask
+   * covers, worked out by the engine from the mask and the depth map (absent: the
+   * photo's own vanishing point).
    */
-  blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean; through?: boolean };
+  blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean; through?: boolean; vanish?: [number, number] };
   /**
    * Fog: air thickening with distance (the depth map) — from `start` (0 = the nearest,
-   * 1 = the farthest) on, exponentially, toward `color` (hex); `amount` 1 = the far
-   * distance lost in it. Mixed in linear light.
+   * 1 = the farthest) on, exponentially, toward `color` (hex); `amount` 0…3 its
+   * density (1: the far distance ≈ 92 % fog; 3: the middle distance lost too). Mixed
+   * in linear light.
    */
   fog: { amount: number; start: number; color: string };
   /**
    * Light by nearness: a fill that is strongest at the front and fades with distance
-   * (a flash, a reflector), up to `amount` EV; `reach` 0…1 how far into the depth it
-   * carries. White stays white (the gain rolls off toward it).
+   * (a flash, a reflector), `amount` −2…4 EV; `reach` 0…1.5 how far into the depth it
+   * carries (beyond 1 the far distance is lit too). Highlights roll off into white.
    */
   light: { amount: number; reach: number };
 }

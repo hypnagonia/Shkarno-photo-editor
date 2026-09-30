@@ -17,24 +17,31 @@ export function motionScale(dist: number, deep: boolean): number {
 export interface Arrow { x: number; y: number; dx: number; dy: number; len: number }
 
 /**
- * Arrows on a cols × rows grid over the photo (0…1 coordinates): direction (unit, screen
- * y down) and length (share of the long side) of the streak there.
+ * Arrows on a cols × rows grid over the photo (0…1 coordinates), where the layer's mask
+ * blurs: direction (unit, screen y down) and length (share of the long side) of the
+ * streak there — into the depth, away from the layer's own vanishing point.
  */
-export function motionArrows(b: LayerParams["blur"], depth: { w: number; h: number; data: number[]; vanish: [number, number] }, cols: number, rows: number, aspect: number): Arrow[] {
+export function motionArrows(b: LayerParams["blur"], depth: { w: number; h: number; data: number[]; mask?: number[]; vanish: [number, number] }, cols: number, rows: number, aspect: number): Arrow[] {
   const out: Arrow[] = [];
   const a = ((b.angle ?? 0) * Math.PI) / 180;
   for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
     const x = (i + 0.5) / cols, y = (j + 0.5) / rows;
-    const d = depth.data[Math.min(depth.h - 1, Math.floor(y * depth.h)) * depth.w + Math.min(depth.w - 1, Math.floor(x * depth.w))] ?? 0.5;
+    const k = Math.min(depth.h - 1, Math.floor(y * depth.h)) * depth.w + Math.min(depth.w - 1, Math.floor(x * depth.w));
+    // Only where the mask blurs (the layer's mask on the same grid).
+    if (depth.mask && (depth.mask[k] ?? 0) < 0.25) continue;
+    const d = depth.data[k] ?? 0.5;
+    const vanish = b.vanish ?? depth.vanish;
     let dx = Math.cos(a), dy = -Math.sin(a);
     if (b.depth) {
       // Away from the vanishing point, measured in the picture's own proportions.
-      const rx = (x - depth.vanish[0]) * aspect, ry = y - depth.vanish[1];
+      const rx = (x - vanish[0]) * aspect, ry = y - vanish[1];
       const r = Math.hypot(rx, ry);
       if (r < 1e-3) continue;
       dx = rx / r; dy = ry / r;
     }
-    out.push({ x, y, dx, dy, len: b.amount * MOTION_STREAK * motionScale(d, !!b.depth) });
+    // (Into the depth: faster the farther from the vanishing point, as layers.wgsl.)
+    const radial = b.depth ? Math.min(1, Math.hypot(((x - vanish[0]) * aspect), y - vanish[1]) / (0.3 * Math.max(aspect, 1))) : 1;
+    out.push({ x, y, dx, dy, len: b.amount * MOTION_STREAK * motionScale(d, !!b.depth) * radial });
   }
   return out;
 }

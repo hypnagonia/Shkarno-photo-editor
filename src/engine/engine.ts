@@ -1119,6 +1119,46 @@ export class Engine {
     return { w, h, data: Array.from(sum, (v, i) => (n[i] ? v / n[i] : 0.5)), vanish: this.renderer.vanishing };
   }
 
+  /**
+   * A layer's mask (view 7 at 384 px) on the depth grid, and where the part it covers
+   * recedes to: the centre of its farthest tenth (mask-weighted) — the far end of a
+   * train, not the sky above it. Nothing covered: the photo's own vanishing point.
+   */
+  async motionField(layer: number): Promise<{ w: number; h: number; data: number[]; mask: number[]; vanish: [number, number] }> {
+    const base = this.depthField();
+    const s = this.s, d = s?.distCPU;
+    if (!s || !d || layer < 0) return { ...base, mask: base.data.map(() => 1) };
+    await this.ensureSelections(s, s.params);
+    const t = await this.ensureThumb(384);
+    const r = await this.renderer.render({ base: t.base, denoised: t.denoised, width: t.w, height: t.h, fullWidth: s.work.width }, s.maps, s.params,
+      { wb: this.wbFor(s.params), gain: s.gain, lightLinear: s.lightLinear, output: "p38", dither: false, debugView: 7, region: layer }, false);
+    const px = new Uint8Array(await this.gpu.readTexture(r.tex, 0, 0, t.w, t.h, 4));
+    const m = new Float32Array(t.w * t.h), dist = new Float32Array(t.w * t.h);
+    for (let y = 0; y < t.h; y++) for (let x = 0; x < t.w; x++) {
+      const i = y * t.w + x;
+      m[i] = px[i * 4 + 1] / 255;
+      dist[i] = d.data[Math.min(d.h - 1, Math.floor((y * d.h) / t.h)) * d.w + Math.min(d.w - 1, Math.floor((x * d.w) / t.w))];
+    }
+    // The farthest tenth of what the mask covers (by mask weight).
+    const idx = Array.from(m.keys()).filter((i) => m[i] > 0.25).sort((a, b) => dist[b] - dist[a]);
+    let vanish = this.renderer.vanishing;
+    if (idx.length) {
+      const total = idx.reduce((a, i) => a + m[i], 0);
+      let acc = 0, sx = 0, sy = 0, sw = 0;
+      for (const i of idx) {
+        if (acc > total * 0.1) break;
+        acc += m[i]; sx += ((i % t.w) + 0.5) * m[i]; sy += (Math.floor(i / t.w) + 0.5) * m[i]; sw += m[i];
+      }
+      if (sw > 0) vanish = [sx / sw / t.w, sy / sw / t.h];
+    }
+    const mask = new Array(base.w * base.h).fill(0), n = new Array(base.w * base.h).fill(0);
+    for (let y = 0; y < t.h; y++) for (let x = 0; x < t.w; x++) {
+      const k = Math.min(base.h - 1, Math.floor((y * base.h) / t.h)) * base.w + Math.min(base.w - 1, Math.floor((x * base.w) / t.w));
+      mask[k] += m[y * t.w + x]; n[k]++;
+    }
+    return { ...base, mask: mask.map((v, k) => (n[k] ? v / n[k] : 0)), vanish };
+  }
+
   focusAt(x: number, y: number): number | undefined {
     const d = this.s?.distCPU;
     if (!d) return undefined;

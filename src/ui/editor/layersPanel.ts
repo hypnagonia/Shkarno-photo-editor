@@ -44,8 +44,11 @@ type Ctx = {
   /** Panels of their own in the dock (tone / contrast equalizers): element, shown, left. */
   toneEq?: { el: HTMLElement; render: () => void; leave: () => void };
   contrastEq?: { el: HTMLElement; render: () => void; leave: () => void };
-  /** A Motion Blur layer's settings are shown (its arrows go on the photo), or none is (undefined). */
-  motionGuide?: (b: LayerParams["blur"] | undefined) => void;
+  /**
+   * A Motion Blur layer's settings are shown (its arrows go on the photo), or none is
+   * (undefined). `layer` (its live index) when its mask may have changed: read it again.
+   */
+  motionGuide?: (b: LayerParams["blur"] | undefined, layer?: number) => void;
   /** The Film card: grain, halation, glow (src/ui/filmPanel.ts). */
   film?: { el: HTMLElement; render: () => void; leave: () => void };
   /** Taps on the photo pick what to mask (on, with a hint for the photo) or do what they normally do (off). */
@@ -334,14 +337,14 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
         const pctv = (v: number) => `${Math.round(v * 100)}%`;
         const current = FOG_COLORS.find((c) => c.color === f.color)?.id;
         return [chips(FOG_COLORS.map((c) => ({ id: c.id, label: t(`fog.${c.id}`) })), current, (id) => { f.color = FOG_COLORS.find((c) => c.id === id)!.color; edit(); renderProps(); }),
-          slider(t("fog.amount"), 0, 1, 0.01, () => f.amount, (v) => (f.amount = v), pctv, 0.5),
+          slider(t("fog.amount"), 0, 3, 0.01, () => f.amount, (v) => (f.amount = v), pctv, 0.5),
           slider(t("fog.start"), 0, 0.9, 0.01, () => f.start, (v) => (f.start = v), pctv, 0.45),
           el("p", { class: "muted", text: t("fog.hint") })];
       }
       case "light": {
         const g = l.params as LayerParams["light"];
-        return [slider(t("light.amount"), -1, 2, 0.01, () => g.amount, (v) => (g.amount = v), (v) => `${v > 0 ? "+" : ""}${v.toFixed(2)} EV`, 1),
-          slider(t("light.reach"), 0.05, 1, 0.01, () => g.reach, (v) => (g.reach = v), (v) => `${Math.round(v * 100)}%`, 0.6),
+        return [slider(t("light.amount"), -2, 4, 0.01, () => g.amount, (v) => (g.amount = v), (v) => `${v > 0 ? "+" : ""}${v.toFixed(2)} EV`, 1),
+          slider(t("light.reach"), 0.05, 1.5, 0.01, () => g.reach, (v) => (g.reach = v), (v) => `${Math.round(v * 100)}%`, 0.6),
           el("p", { class: "muted", text: t("light.hint") })];
       }
       case "brightContrast": {
@@ -764,7 +767,7 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
     const l = sel();
     // A Motion Blur layer's Adjust tab: its streaks drawn on the photo.
     const mb = l?.type === "blur" && tab === "adjust" ? (l.params as LayerParams["blur"]) : undefined;
-    ctx.motionGuide?.(mb?.motion ? mb : undefined);
+    ctx.motionGuide?.(mb?.motion ? mb : undefined, mb?.motion && l ? liveIndex(l.id) : undefined);
     if (!l) {
       if (selected !== "blur" && selected !== "toneEq" && selected !== "contrastEq" && selected !== "film") selected = "develop";
       if (selected !== "blur") ctx.leftBlur?.();

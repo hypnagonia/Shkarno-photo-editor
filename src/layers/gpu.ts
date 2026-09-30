@@ -77,7 +77,7 @@ export function liveLayers(layers: Layer[], autoStrength = 1, enable?: { curves?
  * `autoStrength` (0…1) scales the opacity of every automatic layer (the "Auto strength" control);
  * `enable` (the module switches) turns layers off with their module.
  */
-export function packLayers(layers: Layer[], autoStrength = 1, enable?: { curves?: boolean; semantic?: boolean }, slotOf?: (m: MaskShape) => number): PackedLayers {
+export function packLayers(layers: Layer[], autoStrength = 1, enable?: { curves?: boolean; semantic?: boolean }, slotOf?: (m: MaskShape) => number, vanish: [number, number] = [0.5, 0.5]): PackedLayers {
   const live = liveLayers(layers, autoStrength, enable);
   const records = new Float32Array(Math.max(1, live.length) * RECORD);
   const rows: Float32Array[] = [];
@@ -138,7 +138,7 @@ export function packLayers(layers: Layer[], autoStrength = 1, enable?: { curves?
         rows.push(cachedRow("g" + JSON.stringify(g.gradient), () => gradientTable(g.gradient, ATLAS_W)));
         break;
       }
-      case "blur": { const b = l.params as LayerParams["blur"]; p[0] = Math.max(0, b.amount); p[1] = b.motion ? 1 : 0; p[2] = ((b.angle ?? 0) * Math.PI) / 180; p[3] = b.depth ? 1 : 0; p[4] = b.through ? 1 : 0; break; }
+      case "blur": { const b = l.params as LayerParams["blur"]; p[0] = Math.max(0, b.amount); p[1] = b.motion ? 1 : 0; p[2] = ((b.angle ?? 0) * Math.PI) / 180; p[3] = b.depth ? 1 : 0; p[4] = b.through ? 1 : 0; const v = b.vanish ?? vanish; p[5] = v[0]; p[6] = v[1]; break; }
       case "fog": {
         const f = l.params as LayerParams["fog"];
         const c = p3Linear(f.color);

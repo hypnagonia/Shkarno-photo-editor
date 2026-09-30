@@ -131,10 +131,10 @@ export class Renderer {
       gpu.device.queue.writeTexture({ texture: this.toneLut }, floatsToHalves(toneCurveLUT(p.tone, hdrStops)), { bytesPerRow: TONE_LUT_SIZE * 8 }, { width: TONE_LUT_SIZE, height: 1 });
     }
     // Adjustment layers: records + tables, re-uploaded only when they change.
-    const layKey = JSON.stringify([p.layers ?? [], p.autoCurves ?? 1, p.enable.curves, p.enable.semantic, this.selection?.version ?? 0]);
+    const layKey = JSON.stringify([p.layers ?? [], p.autoCurves ?? 1, p.enable.curves, p.enable.semantic, this.selection?.version ?? 0, this.vanishing]);
     if (layKey !== this.layerKey) {
       this.layerKey = layKey;
-      const pk = packLayers(p.layers ?? [], p.autoCurves ?? 1, p.enable, this.selection?.slotOf);
+      const pk = packLayers(p.layers ?? [], p.autoCurves ?? 1, p.enable, this.selection?.slotOf, this.vanishing);
       this.layerCount = pk.count;
       if (!this.layerBuf || this.layerBuf.size < pk.records.byteLength) {
         gpu.release(this.layerBuf);
@@ -410,7 +410,7 @@ export class Renderer {
       const out = final === t1 ? t2 : t1, back = final;
       await gpu.run("render.motion", (enc, temp) => {
         for (const [pass, from, to] of [[0, final, out], [1, out, back]] as const) {
-          const u = gpu.uniform(new Uniforms(8).u32(W, th, finalLinear ? 1 : 0, 0).f32(motionR, this.vanishing[0] * W, this.vanishing[1] * H - ty0, pass).bytes(), "motion.u");
+          const u = gpu.uniform(new Uniforms(8).u32(W, th, finalLinear ? 1 : 0, 0).f32(motionR, 0, 0, pass).bytes(), "motion.u");
           temp.push(u);
           gpu.dispatch(enc, gpu.pipeline("render.motion", motionWgsl), [u, from.createView(), motionT.createView(), this.sampler, to.createView()], Math.ceil(W / 8), Math.ceil(th / 8));
         }

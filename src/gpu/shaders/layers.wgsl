@@ -90,6 +90,7 @@ var<private> lay_motion: vec3<f32> = vec3<f32>(0.0, 0.0, 1.0);
 var<private> lay_lab: vec3<f32>;
 var<private> lay_lab_ok: bool = false;
 var<private> lay_aspect: f32 = 1.0;
+var<private> lay_uv: vec2<f32> = vec2<f32>(0.5, 0.5);
 fn layer_setup(g: array<f32, 12>, dist: f32, aspect: f32) { lay_g = g; lay_bw = band_w(dist); lay_dist = dist; lay_lab_ok = false; lay_aspect = aspect; }
 
 /** A range [lo, hi] with soft edges; a range starting at 0 or ending at 1 covers that end fully. */
@@ -262,19 +263,29 @@ fn op_exposure(L: LayerRec, e: vec3<f32>) -> vec3<f32> {
   return srgb_oetf(lin);
 }
 
-/** Fog: toward its colour (p1.xyz, linear P3) by distance — from p0.y on, exponentially. */
+/**
+ * Fog: toward its colour (p1.xyz, linear P3) by distance — from p0.y on, exponentially
+ * (Beer–Lambert): density p0.x 1 leaves ≈ 8 % of the far distance, 3 a thick fog that
+ * swallows the middle distance too.
+ */
 fn op_fog(L: LayerRec, e: vec3<f32>) -> vec3<f32> {
   let x = max(lay_dist - L.p0.y, 0.0) / max(1.0 - L.p0.y, 1e-3);
-  let f = clamp(L.p0.x, 0.0, 1.0) * (1.0 - exp(-3.0 * x)) / (1.0 - exp(-3.0));
+  let f = 1.0 - exp(-2.5 * max(L.p0.x, 0.0) * x);
   return srgb_oetf(clamp(mix(srgb_eotf(e), L.p1.xyz, f), vec3<f32>(0.0), vec3<f32>(1.0)));
 }
 
-/** Light by nearness: up to p0.x EV at the front, fading by distance p0.y; white stays white. */
+/**
+ * Light by nearness: p0.x EV at the front, fading by distance over p0.y (beyond 1: the
+ * far distance lit too). The full gain up to the highlights, which roll off into white
+ * instead of clipping.
+ */
 fn op_light(L: LayerRec, e: vec3<f32>) -> vec3<f32> {
   let near = 1.0 - smoothstep(0.0, L.p0.y, lay_dist);
-  let g = exp2(L.p0.x * near);
-  let lin = srgb_eotf(e);
-  return srgb_oetf(clamp(lin * g / (vec3<f32>(1.0) + (g - 1.0) * lin), vec3<f32>(0.0), vec3<f32>(1.0)));
+  let y = srgb_eotf(e) * exp2(L.p0.x * near);
+  let k = 0.7; // shoulder start
+  let over = max(y - vec3<f32>(k), vec3<f32>(0.0));
+  let out = min(y, vec3<f32>(k)) + over / (vec3<f32>(1.0) + over / (1.0 - k));
+  return srgb_oetf(clamp(out, vec3<f32>(0.0), vec3<f32>(1.0)));
 }
 
 fn op_basic(L: LayerRec, e: vec3<f32>) -> vec3<f32> {
@@ -385,6 +396,7 @@ fn apply_layers(e0: vec3<f32>, g: array<f32, 12>, dist: f32, skin_w: f32, uv: ve
   var e = e0;
   let n = u.lay.x;
   layer_setup(g, dist, aspect);
+  lay_uv = uv;
   for (var i = 0u; i < n; i++) {
     let L = layers[i];
     var w = L.a.z * layer_mask(L, skin_w, e, e0, uv);
@@ -395,16 +407,21 @@ fn apply_layers(e0: vec3<f32>, g: array<f32, 12>, dist: f32, skin_w: f32, uv: ve
     if (u32(L.a.x) == 7u) {
       if (L.p0.y > 0.5) {
         // The streak by nearness, as seen from a moving camera: sideways 1.5× at the front,
-        // 0.25× in the far distance. Into the depth (p0.w): 1.6× … 0.1×, its direction away
-        // from the vanishing point (angle 100: the motion pass works it out per pixel).
+        // 0.25× in the far distance. Into the depth (p0.w): 1.6× … 0.1×.
         // (src/layers/motion.ts draws the same on the photo.)
         let deep = L.p0.w > 0.5;
         let dd = clamp(lay_dist, 0.0, 1.0);
         // Through the mask (p1.x): the streak as if unmasked; the mask only mixes it in.
         let through = L.p1.x > 0.5;
-        let full = L.p0.x * select(mix(1.5, 0.25, dd), mix(1.6, 0.1, dd), deep);
+        // Into the depth: away from the layer's vanishing point (p1.yz), in pixel proportions;
+        // and, as the flow of a forward motion, faster the farther from that point (no
+        // starburst where the streaks meet).
+        let r = (lay_uv - L.p1.yz) * vec2<f32>(lay_aspect, 1.0);
+        let radial = select(1.0, min(1.0, length(r) / (0.3 * max(lay_aspect, 1.0))), deep);
+        let full = L.p0.x * select(mix(1.5, 0.25, dd), mix(1.6, 0.1, dd), deep) * radial;
         let m = select(w * full, full, through);
-        if (m * select(1.0, w, through) > lay_motion.x * lay_motion.z) { lay_motion = vec3<f32>(m, select(L.p0.z, 100.0, deep), select(1.0, w, through)); }
+        let ang = select(L.p0.z, atan2(-r.y, r.x), deep && dot(r, r) > 1e-8);
+        if (m * select(1.0, w, through) > lay_motion.x * lay_motion.z) { lay_motion = vec3<f32>(m, ang, select(1.0, w, through)); }
       }
       else { lay_blur = max(lay_blur, w * L.p0.x); }
       continue;

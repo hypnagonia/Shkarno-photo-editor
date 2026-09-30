@@ -10,7 +10,7 @@
 
 struct U {
   size: vec4<u32>, // W, H of this texture, input is linear, _
-  m: vec4<f32>,    // streak length at amount 1 (output px), vanishing point (px of this texture), pass (0, 1)
+  m: vec4<f32>,    // streak length at amount 1 (output px), _, _, pass (0, 1)
 }
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var src: texture_2d<f32>;
@@ -37,12 +37,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let dims = vec2<f32>(f32(u.size.x), f32(u.size.y));
   let lim = vec2<i32>(i32(u.size.x) - 1, i32(u.size.y) - 1);
   // (Screen y points down: a positive angle streaks up and to the right, as on a compass.)
-  var d = vec2<f32>(cos(mv.y), -sin(mv.y));
-  // Angle 100: by depth — along the ray from the vanishing point (perspective).
-  if (mv.y > 50.0) {
-    let r = vec2<f32>(px) + 0.5 - u.m.yz;
-    d = select(vec2<f32>(1.0, 0.0), r / max(length(r), 1e-3), length(r) > 1.0);
-  }
+  // (Into the depth, the layers worked out this pixel's angle from their vanishing point.)
+  let d = vec2<f32>(cos(mv.y), -sin(mv.y));
   let n = i32(clamp(ceil(len / 2.0), 4.0, 64.0));
   // Pass 0: the whole streak in n taps; pass 1: one tap spacing of pass 0, filled in.
   let span = select(len, len / f32(n), u.m.w > 0.5);

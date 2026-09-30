@@ -511,31 +511,41 @@ function shownFocusPoints(): Array<{ x: number; y: number; auto?: boolean }> {
 
 /** One ring per focus point; numbered so several subjects can be told apart. */
 let motionGuide: LayerParams["blur"] | undefined;
-/** This photo's coarse depth and vanishing point (asked once, when the arrows are first drawn). */
-let depthField: { w: number; h: number; data: number[]; vanish: [number, number] } | undefined;
-let depthAsked = false;
+/** The shown Motion layer's mask on the coarse depth grid, and where what it covers recedes to. */
+let motionField: { w: number; h: number; data: number[]; mask: number[]; vanish: [number, number] } | undefined;
+let motionAsk = 0;
+/** A Motion layer's settings opened (layer: its live index — its mask read again) or changed. */
+function setMotionGuide(b: LayerParams["blur"] | undefined, layer?: number) {
+  motionGuide = b;
+  if (b && layer !== undefined && layer >= 0) {
+    const ask = ++motionAsk;
+    void askEngine({ type: "motionField", layer }, (m) => (m.type === "motionField" ? m : undefined), undefined).then((f) => {
+      if (ask !== motionAsk || !f) return;
+      motionField = f;
+      // Into the depth: toward where the masked part recedes (kept in the layer, so the
+      // render and the export use it too).
+      const v = b.vanish;
+      if (!v || Math.hypot(v[0] - f.vanish[0], v[1] - f.vanish[1]) > 0.01) { b.vanish = f.vanish; pushParams(); }
+      renderMotionGuide();
+    });
+  }
+  renderMotionGuide();
+}
 /**
  * Arrows over the photo: which way and how far each part streaks — along the direction,
  * or away from the vanishing point into the depth; longer where things are nearer.
  */
 function renderMotionGuide() {
   const b = motionGuide;
-  if (!b || !params) { if (motionSvg.childElementCount) motionSvg.replaceChildren(); return; }
-  if (!depthField) {
-    if (!depthAsked) {
-      depthAsked = true;
-      void askEngine({ type: "depthField" }, (m) => (m.type === "depthField" ? m : undefined), undefined).then((f) => { depthField = f ?? { w: 1, h: 1, data: [0.5], vanish: [0.5, 0.5] }; renderMotionGuide(); });
-    }
-    return;
-  }
+  if (!b || !params || !motionField) { if (motionSvg.childElementCount) motionSvg.replaceChildren(); return; }
   const r = imageRect(), st = stage.getBoundingClientRect();
   const long = Math.max(r.width, r.height);
-  const cols = r.width >= r.height ? 7 : 5, rows = Math.max(3, Math.round((cols * r.height) / r.width));
+  const cols = r.width >= r.height ? 11 : 8, rows = Math.max(4, Math.round((cols * r.height) / r.width));
   const cell = Math.min(r.width / cols, r.height / rows);
   const ns = "http://www.w3.org/2000/svg";
   const g = document.createElementNS(ns, "g");
   let d = "";
-  for (const a of motionArrows(b, depthField, cols, rows, r.width / r.height)) {
+  for (const a of motionArrows(b, motionField, cols, rows, r.width / r.height)) {
     const L = Math.min(a.len * long, cell * 0.9);
     if (L < 3) continue;
     const cx = r.left - st.left + a.x * r.width, cy = r.top - st.top + a.y * r.height;
@@ -1141,7 +1151,7 @@ const layersPanel = createLayersPanel(dockEl, propsEl, {
   toneEq: toneEqPanel,
   contrastEq: contrastEqTab,
   film: filmPanel,
-  motionGuide: (b) => { motionGuide = b; renderMotionGuide(); },
+  motionGuide: setMotionGuide,
   photoColors: () => askEngine({ type: "palette" }, (m) => (m.type === "palette" ? m.stats.palette.map((w) => w.hex) : undefined), [] as string[]),
   notice: (text) => { badge.textContent = text; badge.classList.add("on"); },
   brightest: () => askEngine({ type: "brightest" }, (m) => (m.type === "brightest" ? { x: m.x, y: m.y } : undefined), { x: 0.3, y: 0.2 }),
@@ -1749,7 +1759,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       busy = false;
       break;
     case "analysis":
-      depthField = undefined; depthAsked = false; // a new photo's depth
+      motionField = undefined; // a new photo's depth
       keepRuntimeWhenIdle(); // the analysis used ONNX Runtime: keep it for offline use
       checkResult = undefined; checkStale = true; renderCheck();
       noteAnalysisStage();

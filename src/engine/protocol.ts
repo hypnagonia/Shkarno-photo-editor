@@ -83,6 +83,8 @@ export type ToWorker =
   | { type: "brightest" }
   /** The depth map, coarse, and where the photo recedes to (motion blur's arrows on the photo). */
   | { type: "depthField" }
+  /** A layer's mask (live index) on the coarse depth grid, and where the part it covers recedes to. */
+  | { type: "motionField"; layer: number }
   /** What is under a tap on the photo (x, y: 0…1 of the picture), for building a mask from it. */
   | { type: "pick"; x: number; y: number; /** The layer (index among the live layers) whose mask the tap edits. */ layer?: number; /** A tap selects an object (tap-to-select). */ object?: boolean }
   | { type: "reference"; file: File; mode: "create" | "match"; amount: number }
@@ -120,6 +122,7 @@ export type FromWorker =
   | { type: "brightest"; x: number; y: number }
   /** Distance 0…1 on a w × h grid (rows top to bottom), and the vanishing point (0…1). */
   | { type: "depthField"; w: number; h: number; data: number[]; vanish: [number, number] }
+  | { type: "motionField"; w: number; h: number; data: number[]; mask: number[]; vanish: [number, number] }
   /** A worked-out fix for a finding of the last check; `done` when there are no more. */
   | { type: "checkFix"; id?: CheckItem["id"]; fix?: FixChange[]; partial?: boolean; done?: boolean }
   | { type: "lookProfile"; profile: LookProfile; reference: ColorStats; message: string }

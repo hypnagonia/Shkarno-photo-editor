@@ -118,6 +118,9 @@ async function handle(m: ToWorker) {
     case "depthField":
       post({ type: "depthField", ...engine.depthField() });
       break;
+    case "motionField":
+      post({ type: "motionField", ...(await engine.motionField(m.layer)) });
+      break;
     case "mem":
       post({ type: "mem", ...engine.memStats() });
       break;
