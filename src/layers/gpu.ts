@@ -176,6 +176,12 @@ export function hasBlurLayers(layers: Layer[], autoStrength = 1, enable?: { curv
 export function hasMotionLayers(layers: Layer[], autoStrength = 1, enable?: { curves?: boolean; semantic?: boolean }): boolean {
   return liveLayers(layers, autoStrength, enable).some((l) => l.type === "blur" && (l.params as LayerParams["blur"]).amount > 0 && !!(l.params as LayerParams["blur"]).motion && !(l.params as LayerParams["blur"]).object);
 }
+/** Bokeh of the first visible lens Blur layer that has it: strength 0…1 and aperture blades (0 round). */
+export function bokehOf(layers: Layer[], autoStrength = 1, enable?: { curves?: boolean; semantic?: boolean }): { amount: number; blades: number } {
+  const l = liveLayers(layers, autoStrength, enable).find((x) => x.type === "blur" && !(x.params as LayerParams["blur"]).motion && ((x.params as LayerParams["blur"]).bokeh ?? 0) > 0 && (x.params as LayerParams["blur"]).amount > 0);
+  const b = l?.params as LayerParams["blur"] | undefined;
+  return { amount: Math.min(1, Math.max(0, b?.bokeh ?? 0)), blades: b?.blades ?? 0 };
+}
 /** The first visible Light Rays layer that adds something. */
 export function raysLayer(layers: Layer[], autoStrength = 1, enable?: { curves?: boolean; semantic?: boolean }): Layer<"rays"> | undefined {
   return liveLayers(layers, autoStrength, enable).find((l) => l.type === "rays" && (l.params as LayerParams["rays"]).amount > 0) as Layer<"rays"> | undefined;

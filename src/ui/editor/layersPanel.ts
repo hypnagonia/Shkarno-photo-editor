@@ -365,6 +365,10 @@ export function createLayersPanel(dock: HTMLElement, props: HTMLElement, ctx: Ct
               el("p", { class: "muted", text: t("blurl.falloffNote") }),
               toggleRow(t("blurl.through"), t("blurl.throughNote"), () => !!b.through, (v) => (b.through = v))] : []),
             ...(b.depth ? [] : [angleRow(t("blurl.angle"), () => b.angle ?? 0, (v) => { b.angle = v; ctx.motionGuide?.(b); })])] : []),
+          ...(b.motion ? [] : [
+            slider(t("blurl.bokeh"), 0, 1, 0.01, () => b.bokeh ?? 0, (v) => (b.bokeh = v), (v) => `${Math.round(v * 100)}%`, 0),
+            ...((b.bokeh ?? 0) > 0 ? [chips([{ id: "0", label: t("blurl.round") }, { id: "6", label: t("blurl.hex") }] as const, String(b.blades ?? 0) as "0" | "6", (v) => { b.blades = Number(v); edit(); renderProps(); })] : []),
+          ]),
           el("p", { class: "muted", text: t(b.motion ? (b.object ? "blurl.objectHint" : "blurl.motionHint") : "blurl.hint") })];
       }
       case "fog": {

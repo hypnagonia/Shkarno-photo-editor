@@ -265,7 +265,12 @@ export async function runAutotest(app: AutotestApp) {
       }
       else if (s === "reopen") await open("reopen");
       else if (s === "select") await addLayer("select", makeLayer("basic", "Autotest select", { mask: center, params: { exposure: 0.4, temp: 0, tint: 0, saturation: 0, vibrance: 0, hue: 0 } }));
-      else if (s === "blur") await addLayer("blur", makeLayer("blur", "Autotest blur", { mask: { ...center, invert: true }, params: { amount: 0.5 } }));
+      else if (s === "blur") {
+        // A lens Blur layer around the centre object (?ball: over the whole photo); ?bamount, ?bokeh, ?blades; exported as blur.
+        const all = { kind: "all" as const, invert: false, feather: 1, density: 1 };
+        await addLayer("blur", makeLayer("blur", "Autotest blur", { mask: q.has("ball") ? all : { ...center, invert: true }, params: { amount: Number(q.get("bamount") ?? 0.5), bokeh: Number(q.get("bokeh") ?? 0), blades: Number(q.get("blades") ?? 0) } }));
+        if (q.has("save") && q.has("bokeh")) await saveExport("blur");
+      }
       else if (s === "motion") {
         // Motion blur of everything but the picked subject (?angle=, default horizontal; ?parallax: into the depth; ?through: through the mask), exported as motion.
         // ?pick=x,y: the object tapped there (default the centre); ?keep: blur it, not everything else.

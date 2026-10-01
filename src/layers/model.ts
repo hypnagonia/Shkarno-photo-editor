@@ -147,8 +147,11 @@ export interface LayerParams {
    * both ways) … 1 (all behind it), `sharp` 0…1 the object itself sharp on top. With
    * `depth`, it moves along the depth instead of `angle`: into it, or toward the camera
    * (`arriving`) — a scale about `vanish`.
+   * Lens: `bokeh` 0…1 — bright points open into discs of light (the blur's gather weights
+   * them by brightness), `blades` 0 round or 6 a hexagonal aperture. The first visible lens
+   * layer with bokeh sets it for the whole depth-of-field pass.
    */
-  blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean; through?: boolean; vanish?: [number, number]; range?: [number, number]; reach?: number; falloff?: number; object?: boolean; trail?: number; sharp?: number; arriving?: boolean };
+  blur: { amount: number; motion?: boolean; angle?: number; depth?: boolean; through?: boolean; vanish?: [number, number]; range?: [number, number]; reach?: number; falloff?: number; object?: boolean; trail?: number; sharp?: number; arriving?: boolean; bokeh?: number; blades?: number };
   /**
    * Fog: air thickening with distance (the depth map) — from `start` (0 = the nearest,
    * 1 = the farthest) on, toward `color` (hex), by the real distance through the air

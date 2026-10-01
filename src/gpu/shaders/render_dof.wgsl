@@ -14,7 +14,7 @@ struct U {
   zc: array<vec4<f32>, 2>,   // 4 inner depth-zone boundaries (zc[0]) — zone mode when f.y = 1
   zv: array<vec4<f32>, 2>,   // blur 0..1 per zone
   fociHi: array<vec4<f32>, 2>, // … and the far end (a point on a flat spot: both the same)
-  b: vec4<f32>,        // Blur layers' radius px at amount 1, depth of field on (1) / off (0), _, _
+  b: vec4<f32>,        // Blur layers' radius px at amount 1, depth of field on (1) / off (0), bokeh 0…1, aperture blades (0 round)
 }
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var src: texture_2d<f32>;       // mip chain of the sharpened image (linear P3)
@@ -75,6 +75,26 @@ fn coc_pass(@builtin(global_invocation_id) id: vec3<u32>) {
   textureStore(cocdst, vec2<i32>(id.xy), vec4<f32>(d, max(depth_coc, (k / 1000.0) * u.b.x), 0.0, 0.0));
 }
 
+/**
+ * Bokeh: how bright a sample is as a light — 0 … 1 from about a mid grey up (linear
+ * brightness, HDR excess included). A light counts up to ×30 in the gather (it fills its
+ * disc instead of fading into what surrounds it) and shines up to ×2.5 brighter (a lamp is
+ * far brighter than the picture can show: its disc stays bright when spread wide).
+ */
+fn light_of(s: vec4<f32>) -> f32 {
+  if (u.b.z <= 0.0) { return 0.0; }
+  let y = dot(max(s.rgb, vec3<f32>(0.0)), LUMAP3) + max(s.a, 0.0);
+  return u.b.z * smoothstep(0.06, 0.45, y);
+}
+/** A polygonal aperture: the disc's edge distance at angle `a` (1 at the corners), round when no blades. */
+fn aperture(a: f32) -> f32 {
+  let n = u.b.w;
+  if (n < 3.0) { return 1.0; }
+  let seg = 6.2831853 / n;
+  let t = a - seg * floor(a / seg) - seg * 0.5;
+  return cos(seg * 0.5) / cos(t);
+}
+
 fn coc_at(px: vec2<f32>) -> vec2<f32> {
   let m = vec2<i32>(i32(u.size.x) - 1, i32(u.size.y) - 1);
   return textureLoad(coct, clamp(vec2<i32>(px), vec2<i32>(0), m), 0).rg;
@@ -92,25 +112,32 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // Alpha arrives as HDR excess luminance (output.wgsl linearize) and leaves as a gain again.
   if (rc < 0.6) { textureStore(dst, vec2<i32>(id.xy), vec4<f32>(center.rgb, 1.0 + center.a / max(dot(center.rgb, LUMAP3), 1e-6))); return; }
   let size = vec2<f32>(f32(W), f32(H));
-  var acc = center; var ws = 1.0;
-  let N = 48;
+  // (The centre as one ordinary tap: a lamp's own sharp core must not show through its disc.)
+  var acc = center * (1.0 + 1.5 * light_of(center)); var ws = 1.0;
+  // Bokeh: more taps, the spiral turned at random per pixel (a highlight's disc is filled
+  // evenly, not printed with the spiral's pattern).
+  let N = select(48, 128, u.b.z > 0.0);
   let golden = 2.39996323;
-  let level = clamp(log2(max(rc, 1.0) / 5.0), 0.0, u.f.z - 1.0);
+  let spin = select(0.0, fract(sin(dot(px, vec2<f32>(12.9898, 78.233))) * 43758.547) * 6.2831853, u.b.z > 0.0);
+  // (With bokeh a level finer, the taps being denser: the discs keep their edge.)
+  let level = clamp(log2(max(rc, 1.0) / 5.0) - select(0.0, 1.0, u.b.z > 0.0), 0.0, u.f.z - 1.0);
   for (var i = 1; i <= N; i++) {
     let r = rc * sqrt(f32(i) / f32(N));
-    let a = f32(i) * golden;
+    let a = f32(i) * golden + spin;
     let o = vec2<f32>(cos(a), sin(a)) * r;
     let sp = px + o;
     if (sp.x < 0.0 || sp.y < 0.0 || sp.x >= size.x || sp.y >= size.y) { continue; }
     let cs = coc_at(sp);
     let ds = cs.x;
-    let rs = cs.y;
-    // A sample contributes if its own blur disc reaches the centre…
+    let rs = cs.y * aperture(a + 0.5236);
+    // A sample contributes if its own blur disc (its aperture's shape) reaches the centre…
     var w = smoothstep(r - 1.0, r + 1.0, rs);
     // …and background behind a sharper centre may not spill onto it.
     if (ds > dc + 0.04) { w *= smoothstep(r - 1.0, r + 1.0, rc); w = min(w, smoothstep(0.0, 0.1, rc / max(u.d.y, 1.0))); }
     let s = textureSampleLevel(src, samp, sp / size, level);
-    acc += s * w; ws += w;
+    let ls = light_of(s);
+    w *= 1.0 + 29.0 * ls;
+    acc += s * (1.0 + 1.5 * ls) * w; ws += w;
   }
   let m = acc / ws;
   textureStore(dst, vec2<i32>(id.xy), vec4<f32>(m.rgb, 1.0 + m.a / max(dot(m.rgb, LUMAP3), 1e-6)));

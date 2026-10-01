@@ -15,7 +15,7 @@ import layersWgsl from "../gpu/shaders/layers.wgsl?raw";
 import { TONE_EQ_DETAIL, toneEqActive, toneEqLut } from "../tone/toneEq.ts";
 import { contrastEqActive, edgeSigma, levels, stripApron, type ContrastEq } from "../tone/contrastEq.ts";
 import ceqWgsl from "../gpu/shaders/render_ceq.wgsl?raw";
-import { ATLAS_W, hasBlurLayers, hasMotionLayers, objectMotionLayer, raysLayer, packLayers, RECORD } from "../layers/gpu.ts";
+import { ATLAS_W, bokehOf, hasBlurLayers, hasMotionLayers, objectMotionLayer, raysLayer, packLayers, RECORD } from "../layers/gpu.ts";
 import type { MaskShape } from "../layers/model.ts";
 import detailWgsl from "../gpu/shaders/render_detail.wgsl?raw";
 import dofWgsl from "../gpu/shaders/render_dof.wgsl?raw";
@@ -603,6 +603,7 @@ export class Renderer {
         gpu.dispatch(enc, gpu.pipeline("output.mip", outputWgsl, "mip"), [u, mipTex.createView({ baseMipLevel: l - 1, mipLevelCount: 1 }), undefined, mipTex.createView({ baseMipLevel: l, mipLevelCount: 1 })], Math.ceil(nw / 8), Math.ceil(nh / 8));
         w = nw; h = nh;
       }
+      const bk = bokehOf(p.layers ?? [], p.autoCurves ?? 1, p.enable);
       const pts = p.dof.points.slice(0, 8);
       // Each point keeps its object's whole depth range sharp (a flat spot: just its distance).
       const foci = Array.from({ length: 8 }, (_, i) => pts[i]?.range?.[0] ?? pts[i]?.dist ?? 0);
@@ -611,7 +612,7 @@ export class Renderer {
       const zonesOn = p.dof.mode === "zones" && p.dof.zones?.length === 5 && p.dof.zoneBounds?.length === 4;
       const zc = zonesOn ? [...p.dof.zoneBounds!, 0, 0, 0, 0] : new Array(8).fill(0);
       const zv = zonesOn ? [...p.dof.zones!, 0, 0, 0] : new Array(8).fill(0);
-      const u = gpu.uniform(new Uniforms(48).u32(W, H, 0, 0).f32(p.dof.focus, maxRadius, 0.6, span[0]).f32(pts.length, zonesOn ? 1 : 0, levels, span[1]).f32(...foci).f32(...zc).f32(...zv).f32(...fociHi).f32(blurR, depthOn ? 1 : 0, 0, 0).bytes());
+      const u = gpu.uniform(new Uniforms(48).u32(W, H, 0, 0).f32(p.dof.focus, maxRadius, 0.6, span[0]).f32(pts.length, zonesOn ? 1 : 0, levels, span[1]).f32(...foci).f32(...zc).f32(...zv).f32(...fociHi).f32(blurR, depthOn ? 1 : 0, bk.amount, bk.blades).bytes());
       temp.push(u);
       const cocT = this.target("dof.coc", W, H, "rg32float");
       gpu.dispatch(enc, gpu.pipeline("render.dof.coc", dofWgsl, "coc_pass"), [u, undefined, distT.createView(), undefined, undefined, undefined, cocT.createView()], Math.ceil(W / 8), Math.ceil(H / 8));
